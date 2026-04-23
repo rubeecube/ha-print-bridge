@@ -151,10 +151,47 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         if parts:
             await self.async_request_refresh()
 
-    async def _async_fetch_and_print(
-        self, entry_id: str, uid: str, part_key: str, filename: str
+    async def async_process_imap_part(
+        self,
+        entry_id: str,
+        uid: str,
+        part_key: str,
+        filename: str | None = None,
+        duplex_override: str | None = None,
+        booklet_override: bool | None = None,
     ) -> PrintJobResult:
-        """Fetch one attachment via imap.fetch_part and print it."""
+        """Fetch one IMAP attachment and print it with optional setting overrides.
+
+        Called by the ``auto_print.process_imap_part`` service so that
+        automations and blueprints can drive printing with per-job settings.
+        """
+        effective_filename = filename or f"attachment_{part_key}.pdf"
+        result = await self._async_fetch_and_print(
+            entry_id=entry_id,
+            uid=uid,
+            part_key=part_key,
+            filename=effective_filename,
+            duplex_override=duplex_override,
+            booklet_override=booklet_override,
+        )
+        self._record_job(result)
+        await self.async_request_refresh()
+        return result
+
+    async def _async_fetch_and_print(
+        self,
+        entry_id: str,
+        uid: str,
+        part_key: str,
+        filename: str,
+        duplex_override: str | None = None,
+        booklet_override: bool | None = None,
+    ) -> PrintJobResult:
+        """Fetch one attachment via imap.fetch_part and print it.
+
+        *duplex_override* and *booklet_override* take precedence over the
+        integration's configured defaults when provided.
+        """
         try:
             response: dict[str, Any] = await self.hass.services.async_call(
                 "imap",
@@ -183,9 +220,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             logger.error("Decoding attachment '%s' failed: %s", filename, exc)
             return PrintJobResult(filename=filename, success=False, error=str(exc))
 
-        booklet = is_booklet_job(filename, self._booklet_patterns)
+        effective_duplex = duplex_override or self._duplex_mode
+        effective_booklet = (
+            booklet_override
+            if booklet_override is not None
+            else is_booklet_job(filename, self._booklet_patterns)
+        )
         return await self.async_send_print_job(
-            filename, pdf_bytes, self._duplex_mode, booklet
+            filename, pdf_bytes, effective_duplex, effective_booklet
         )
 
     # ------------------------------------------------------------------

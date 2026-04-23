@@ -25,6 +25,7 @@ from .const import (
     FIELD_FILE_PATH,
     SERVICE_CLEAR_QUEUE,
     SERVICE_PRINT_FILE,
+    SERVICE_PROCESS_IMAP_PART,
 )
 from .coordinator import AutoPrintCoordinator
 
@@ -37,6 +38,17 @@ _PRINT_FILE_SCHEMA = vol.Schema(
         vol.Required(FIELD_FILE_PATH): cv.string,
         vol.Optional(FIELD_DUPLEX): vol.In(DUPLEX_MODES),
         vol.Optional(FIELD_BOOKLET, default=False): cv.boolean,
+    }
+)
+
+_PROCESS_IMAP_PART_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): cv.string,
+        vol.Required("uid"): cv.string,
+        vol.Required("part_key"): cv.string,
+        vol.Optional("filename"): cv.string,
+        vol.Optional("duplex"): vol.In(DUPLEX_MODES),
+        vol.Optional("booklet", default=False): cv.boolean,
     }
 )
 
@@ -84,6 +96,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -
         if not remaining:
             hass.services.async_remove(DOMAIN, SERVICE_PRINT_FILE)
             hass.services.async_remove(DOMAIN, SERVICE_CLEAR_QUEUE)
+            hass.services.async_remove(DOMAIN, SERVICE_PROCESS_IMAP_PART)
 
     return unload_ok
 
@@ -113,10 +126,32 @@ def _register_services(hass: HomeAssistant) -> None:
         deleted = await coordinator.async_clear_queue()
         logger.debug("Cleared %d file(s) from the print queue", deleted)
 
+    async def _handle_process_imap_part(call: ServiceCall) -> None:
+        """Service called by blueprints/automations to fetch an IMAP part and print it."""
+        coordinator = _get_any_coordinator(hass)
+        result = await coordinator.async_process_imap_part(
+            entry_id=call.data["entry_id"],
+            uid=call.data["uid"],
+            part_key=call.data["part_key"],
+            filename=call.data.get("filename"),
+            duplex_override=call.data.get("duplex"),
+            booklet_override=call.data.get("booklet", False) or None,
+        )
+        if not result.success:
+            raise HomeAssistantError(
+                f"Print job failed for '{result.filename}': {result.error}"
+            )
+
     hass.services.async_register(
         DOMAIN, SERVICE_PRINT_FILE, _handle_print_file, schema=_PRINT_FILE_SCHEMA
     )
     hass.services.async_register(DOMAIN, SERVICE_CLEAR_QUEUE, _handle_clear_queue)
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PROCESS_IMAP_PART,
+        _handle_process_imap_part,
+        schema=_PROCESS_IMAP_PART_SCHEMA,
+    )
 
 
 def _get_any_coordinator(hass: HomeAssistant) -> AutoPrintCoordinator:

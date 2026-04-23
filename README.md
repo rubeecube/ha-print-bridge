@@ -162,6 +162,71 @@ A: Use `http://<cups-host-ip>:631`. If using the CUPS add-on on HA OS with host 
 
 ---
 
+## Blueprint — Advanced Email Rules
+
+For fine-grained control (multiple senders, per-keyword duplex/booklet rules, multiple printers), use the included automation blueprint instead of the built-in event listener.
+
+### Import the blueprint
+
+In Home Assistant go to **Settings → Automations → Blueprints → Import Blueprint** and paste:
+
+```
+https://github.com/rubeecube/custom_component_hassio_print/blob/main/blueprints/automation/auto_print/print_from_email.yaml
+```
+
+### Blueprint inputs
+
+| Input | Description |
+|---|---|
+| IMAP Account | Select the HA IMAP integration entry to monitor |
+| Allowed Senders | Comma-separated addresses; empty = accept all |
+| Subject Must Contain | Optional keyword gate on the subject line |
+| Default Duplex Mode | Fallback for all jobs |
+| One-sided Keywords | Subject keywords that override to one-sided |
+| Two-sided Portrait Keywords | Subject keywords that force long-edge duplex |
+| Booklet Keywords | Subject keywords that trigger booklet page reordering |
+| Booklet Senders | Senders whose mail is always printed as a booklet |
+| Mark as Seen | Whether to set the \\Seen flag after processing |
+
+### Decision logic
+
+```
+imap_content event received
+        │
+        ├─ sender in allowed_senders? (empty = yes) ──── no ──► skip
+        │
+        ├─ subject contains filter? (empty = yes) ──────── no ──► skip
+        │
+        ├─ any PDF part? ─────────────────────────────── no ──► skip
+        │
+        └─ for each PDF part:
+                 is_booklet = subject has booklet keyword OR sender in booklet_senders
+                 duplex    = "two-sided-short-edge"  if is_booklet
+                           = "one-sided"             if subject has one-sided keyword
+                           = "two-sided-long-edge"   if subject has two-sided keyword
+                           = default_duplex          otherwise
+                 ──► auto_print.process_imap_part(duplex, booklet)
+                 ──► imap.seen  (if mark_as_seen)
+```
+
+### Example: Separate rules for invoices vs. programmes
+
+Create **two** automations from the blueprint:
+
+**Automation 1 — Invoices (one-sided):**
+- Allowed Senders: `billing@mybank.com`
+- One-sided Keywords: `INVOICE`
+- Default Duplex: One-sided
+
+**Automation 2 — Church programmes (booklet):**
+- Allowed Senders: `liturgie@church.org`
+- Booklet Keywords: `Programme, Bulletin`
+- Booklet Senders: `liturgie@church.org`
+
+The `auto_print.process_imap_part` service used by the blueprint also works directly in any automation or script.
+
+---
+
 ## Contributing
 
 Pull requests are welcome. Please open an issue first for significant changes.

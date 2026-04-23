@@ -37,6 +37,7 @@ DUPLEX_MODES: dict[str, str] = {
 # ---------------------------------------------------------------------------
 SERVICE_PRINT_FILE = "print_file"
 SERVICE_CLEAR_QUEUE = "clear_queue"
+SERVICE_PROCESS_IMAP_PART = "process_imap_part"
 
 FIELD_FILE_PATH = "file_path"
 FIELD_DUPLEX = "duplex"

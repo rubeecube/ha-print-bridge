@@ -1,0 +1,261 @@
+blueprint:
+  name: "Auto Print — Email to Printer"
+  description: >
+    Print PDF email attachments with configurable sender filters, subject
+    keyword rules, and per-condition duplex / booklet settings.
+
+
+    **Requires:**
+
+    - The HA built-in **IMAP** integration configured and pointing at your
+      print mailbox.
+
+    - The **Auto Print** custom integration installed and set up with your
+      CUPS server.
+
+
+    **How it works:**
+
+    Triggers on every `imap_content` event from the selected IMAP account.
+    Filters by sender and subject, then calls `auto_print.process_imap_part`
+    for each PDF attachment with the computed duplex/booklet settings.
+    Optionally marks the email as seen.
+
+  domain: automation
+  author: rubeecube
+  source_url: https://github.com/rubeecube/custom_component_hassio_print/blob/main/blueprints/automation/auto_print/print_from_email.yaml
+
+  input:
+
+    # ── IMAP account ──────────────────────────────────────────────────────
+
+    imap_entry_id:
+      name: IMAP Account
+      description: >
+        Select the IMAP integration entry to monitor.
+        Configure the IMAP integration first (Settings → Integrations → IMAP).
+      selector:
+        config_entry:
+          integration: imap
+
+    # ── Sender filter ─────────────────────────────────────────────────────
+
+    allowed_senders:
+      name: Allowed Senders
+      description: >
+        Comma-separated list of email addresses allowed to trigger printing.
+        Leave empty to accept mail from **any** sender.
+
+        Example: `print@example.com, admin@example.com`
+      default: ""
+      selector:
+        text:
+          multiline: true
+
+    # ── Subject filter ────────────────────────────────────────────────────
+
+    subject_filter:
+      name: Subject Must Contain (optional)
+      description: >
+        Only process emails whose **subject** contains this text
+        (case-insensitive). Leave empty to accept all subjects.
+
+        Example: `PRINT`
+      default: ""
+      selector:
+        text:
+
+    # ── Default duplex setting ────────────────────────────────────────────
+
+    default_duplex:
+      name: Default Duplex Mode
+      description: Applied to all jobs unless overridden by a keyword rule below.
+      default: "two-sided-long-edge"
+      selector:
+        select:
+          options:
+            - label: "One-sided"
+              value: "one-sided"
+            - label: "Two-sided — portrait (long edge)"
+              value: "two-sided-long-edge"
+            - label: "Two-sided — landscape / short edge (for booklets)"
+              value: "two-sided-short-edge"
+
+    # ── Keyword rules — duplex override ───────────────────────────────────
+
+    one_sided_subject_keywords:
+      name: One-sided Keywords (Subject)
+      description: >
+        Comma-separated keywords. If the email **subject** contains any of
+        these, the job is printed **one-sided**, overriding the default.
+
+        Example: `RECEIPT, INVOICE, TICKET, SCAN`
+      default: ""
+      selector:
+        text:
+
+    two_sided_long_subject_keywords:
+      name: Two-sided Portrait Keywords (Subject)
+      description: >
+        Comma-separated keywords. If the email **subject** contains any of
+        these, the job is printed **two-sided long-edge (portrait)**.
+
+        Example: `LETTER, REPORT, CONTRACT`
+      default: ""
+      selector:
+        text:
+
+    # ── Booklet rules ─────────────────────────────────────────────────────
+
+    booklet_subject_keywords:
+      name: Booklet Keywords (Subject)
+      description: >
+        Comma-separated keywords. If the email **subject** contains any of
+        these, pages are reordered for **saddle-stitch booklet** printing
+        (two-sided short-edge). This overrides the default duplex setting.
+
+        Example: `BOOKLET, PROGRAMME, LIVRET, BULLETIN`
+      default: ""
+      selector:
+        text:
+
+    booklet_senders:
+      name: Booklet Senders (always booklet)
+      description: >
+        Comma-separated email addresses. Mail from these senders is **always**
+        printed as a booklet, regardless of the subject.
+
+        Example: `liturgie@example.com`
+      default: ""
+      selector:
+        text:
+
+    # ── Post-processing ───────────────────────────────────────────────────
+
+    mark_as_seen:
+      name: Mark Email as Seen After Processing
+      description: >
+        Mark the email as read in the IMAP mailbox after all PDF attachments
+        have been sent to the printer.
+      default: true
+      selector:
+        boolean:
+
+# ── Trigger ────────────────────────────────────────────────────────────────
+
+trigger:
+  - trigger: event
+    event_type: imap_content
+    event_data:
+      entry_id: !input imap_entry_id
+
+# ── Variables ──────────────────────────────────────────────────────────────
+# All inputs are captured here so they can be referenced in templates below.
+
+variables:
+  imap_entry_id: !input imap_entry_id
+  allowed_senders_raw: !input allowed_senders
+  subject_filter_raw: !input subject_filter
+  default_duplex: !input default_duplex
+  one_sided_kw_raw: !input one_sided_subject_keywords
+  two_sided_long_kw_raw: !input two_sided_long_subject_keywords
+  booklet_subj_kw_raw: !input booklet_subject_keywords
+  booklet_senders_raw: !input booklet_senders
+  mark_as_seen: !input mark_as_seen
+
+  # Normalised lists (lowercased, whitespace-trimmed, empty strings removed)
+  _sender_list: >
+    {{ allowed_senders_raw | string | lower | split(',')
+       | map('trim') | reject('eq', '') | list }}
+  _one_sided_list: >
+    {{ one_sided_kw_raw | string | lower | split(',')
+       | map('trim') | reject('eq', '') | list }}
+  _two_sided_long_list: >
+    {{ two_sided_long_kw_raw | string | lower | split(',')
+       | map('trim') | reject('eq', '') | list }}
+  _booklet_subj_list: >
+    {{ booklet_subj_kw_raw | string | lower | split(',')
+       | map('trim') | reject('eq', '') | list }}
+  _booklet_sender_list: >
+    {{ booklet_senders_raw | string | lower | split(',')
+       | map('trim') | reject('eq', '') | list }}
+
+  # Shortcuts from the event
+  _sender: "{{ trigger.event.data.sender | lower }}"
+  _subject: "{{ trigger.event.data.subject | lower }}"
+  _uid: "{{ trigger.event.data.uid | string }}"
+  _parts: "{{ trigger.event.data.parts }}"
+
+  # ── Computed print settings for this email ──
+  _is_booklet: >
+    {{ (_booklet_subj_list | select('in', _subject) | list | count > 0)
+       or (_sender in _booklet_sender_list) }}
+
+  _effective_duplex: >
+    {% if _is_booklet %}
+      two-sided-short-edge
+    {% elif _one_sided_list | select('in', _subject) | list | count > 0 %}
+      one-sided
+    {% elif _two_sided_long_list | select('in', _subject) | list | count > 0 %}
+      two-sided-long-edge
+    {% else %}
+      {{ default_duplex }}
+    {% endif %}
+
+# ── Conditions ──────────────────────────────────────────────────────────────
+
+condition:
+  - alias: "Sender is in the allowed list (or list is empty)"
+    condition: template
+    value_template: >
+      {{ _sender_list | count == 0 or _sender in _sender_list }}
+
+  - alias: "Subject contains the required filter text (or filter is empty)"
+    condition: template
+    value_template: >
+      {{ subject_filter_raw | trim == ''
+         or subject_filter_raw | lower in _subject }}
+
+  - alias: "Email has at least one PDF attachment"
+    condition: template
+    value_template: >
+      {{ _parts.values() | list
+         | selectattr('content_type', 'equalto', 'application/pdf')
+         | list | count > 0 }}
+
+# ── Actions ─────────────────────────────────────────────────────────────────
+
+action:
+  - alias: "Print each PDF attachment"
+    repeat:
+      # parts is a dict {'1': {content_type, filename, …}, …}
+      # dictsort gives [('1', {…}), ('2', {…}), …] ordered by key
+      for_each: "{{ _parts | dictsort }}"
+      sequence:
+        - condition: template
+          value_template: "{{ repeat.item[1].content_type == 'application/pdf' }}"
+
+        - action: auto_print.process_imap_part
+          data:
+            entry_id: "{{ trigger.event.data.entry_id }}"
+            uid: "{{ _uid }}"
+            part_key: "{{ repeat.item[0] }}"
+            filename: >
+              {{ repeat.item[1].filename
+                 or repeat.item[1].get('file_name')
+                 or ('attachment_' ~ repeat.item[0] ~ '.pdf') }}
+            duplex: "{{ _effective_duplex }}"
+            booklet: "{{ _is_booklet }}"
+
+  - alias: "Mark email as seen (optional)"
+    if:
+      - condition: template
+        value_template: "{{ mark_as_seen }}"
+    then:
+      - action: imap.seen
+        data:
+          entry_id: "{{ imap_entry_id }}"
+          uid: "{{ _uid }}"
+
+mode: queued
+max: 10

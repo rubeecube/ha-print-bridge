@@ -39,3 +39,61 @@ clear_queue:
   name: Clear Print Queue
   description: >-
     Delete all PDF files currently sitting in the configured print queue folder.
+
+process_imap_part:
+  name: Process IMAP Email Part
+  description: >-
+    Fetch a specific PDF attachment from an IMAP message and send it to the
+    printer.  Intended to be called from automations and blueprints after an
+    imap_content event.  Allows per-job overrides for duplex and booklet mode.
+  fields:
+    entry_id:
+      name: IMAP Entry ID
+      description: >-
+        The entry_id of the IMAP config entry that received the email.
+        Available as trigger.event.data.entry_id in automations.
+      required: true
+      selector:
+        text:
+    uid:
+      name: Email UID
+      description: The IMAP UID of the message (trigger.event.data.uid).
+      required: true
+      selector:
+        text:
+    part_key:
+      name: Part Key
+      description: >-
+        The key of the part to fetch (from trigger.event.data.parts).
+        e.g. "1" or "0,1".
+      required: true
+      selector:
+        text:
+    filename:
+      name: Filename
+      description: Display name for the print job. Defaults to the attachment filename.
+      required: false
+      selector:
+        text:
+    duplex:
+      name: Duplex Mode
+      description: Override the integration's default duplex mode for this job.
+      required: false
+      selector:
+        select:
+          options:
+            - label: "One-sided"
+              value: "one-sided"
+            - label: "Two-sided — portrait (long edge)"
+              value: "two-sided-long-edge"
+            - label: "Two-sided — landscape (short edge)"
+              value: "two-sided-short-edge"
+    booklet:
+      name: Booklet Mode
+      description: >-
+        Reorder pages for saddle-stitch booklet printing.
+        Overrides automatic booklet detection from filename patterns.
+      required: false
+      default: false
+      selector:
+        boolean:
