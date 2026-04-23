@@ -26,6 +26,7 @@ class EmailPreview:
     subject: str
     sender: str
     date: str
+    folder: str
     has_pdf: bool
     pdf_count: int
     matches_filter: bool   # True if sender is in allowed_senders (or list is empty)
@@ -36,6 +37,7 @@ class EmailPreview:
             "subject": self.subject,
             "sender": self.sender,
             "date": self.date,
+            "folder": self.folder,
             "has_pdf": self.has_pdf,
             "pdf_count": self.pdf_count,
             "matches_filter": self.matches_filter,
@@ -48,16 +50,15 @@ def preview_mailbox(
     use_ssl: bool,
     username: str,
     password: str,
-    folder: str,
+    folders: list[str],
     allowed_senders: list[str],
 ) -> list[EmailPreview]:
-    """Connect to IMAP, search for recent emails, and return previews.
+    """Connect to IMAP, search one or more folders, and return email previews.
 
-    When *allowed_senders* is non-empty, only emails from those addresses are
-    searched.  When it is empty, the most recent *_MAX_TOTAL* messages in the
-    folder are inspected.
+    *folders* — IMAP folder names to inspect (e.g. ``["INBOX", "INBOX/Print"]``).
+    *allowed_senders* — filter results to these addresses; empty = all senders.
 
-    Returns a list sorted newest-first.
+    Returns a combined list sorted newest-first across all folders.
     """
     mail: imaplib.IMAP4 | imaplib.IMAP4_SSL | None = None
     results: list[EmailPreview] = []
@@ -69,29 +70,9 @@ def preview_mailbox(
             logger.error("IMAP login failed for %s@%s", username, server)
             return results
 
-        status, _ = mail.select(folder, readonly=True)
-        if status != "OK":
-            logger.error("Cannot select folder '%s'", folder)
-            return results
-
-        uid_set: set[str] = set()
-
-        if allowed_senders:
-            for sender in allowed_senders:
-                status, data = mail.uid("search", None, f'FROM "{sender}"')
-                if status == "OK" and data and data[0]:
-                    uids = data[0].decode().split()
-                    uid_set.update(uids[-_MAX_PER_SENDER:])
-        else:
-            status, data = mail.uid("search", None, "ALL")
-            if status == "OK" and data and data[0]:
-                all_uids = data[0].decode().split()
-                uid_set.update(all_uids[-_MAX_TOTAL:])
-
-        for uid in sorted(uid_set):
-            preview = _build_preview(mail, uid, allowed_senders)
-            if preview:
-                results.append(preview)
+        for folder in folders:
+            folder_results = _search_folder(mail, folder, allowed_senders)
+            results.extend(folder_results)
 
     except (imaplib.IMAP4.error, OSError):
         logger.exception("IMAP filter preview failed for %s@%s", username, server)
@@ -102,15 +83,50 @@ def preview_mailbox(
             except Exception:
                 pass
 
-    # Sort newest-first by date string (lexicographic is close enough for RFC2822).
+    # Sort newest-first (RFC2822 date strings sort approximately correctly lexicographically).
     results.sort(key=lambda e: e.date, reverse=True)
     return results
+
+
+def _search_folder(
+    mail: imaplib.IMAP4 | imaplib.IMAP4_SSL,
+    folder: str,
+    allowed_senders: list[str],
+) -> list[EmailPreview]:
+    """Select *folder*, search for matching messages, return previews."""
+    folder_results: list[EmailPreview] = []
+
+    status, _ = mail.select(folder, readonly=True)
+    if status != "OK":
+        logger.warning("Cannot select IMAP folder '%s' — skipping", folder)
+        return folder_results
+
+    uid_set: set[str] = set()
+    if allowed_senders:
+        for sender in allowed_senders:
+            status, data = mail.uid("search", None, f'FROM "{sender}"')
+            if status == "OK" and data and data[0]:
+                uids = data[0].decode().split()
+                uid_set.update(uids[-_MAX_PER_SENDER:])
+    else:
+        status, data = mail.uid("search", None, "ALL")
+        if status == "OK" and data and data[0]:
+            all_uids = data[0].decode().split()
+            uid_set.update(all_uids[-_MAX_TOTAL:])
+
+    for uid in sorted(uid_set):
+        preview = _build_preview(mail, uid, allowed_senders, folder)
+        if preview:
+            folder_results.append(preview)
+
+    return folder_results
 
 
 def _build_preview(
     mail: imaplib.IMAP4 | imaplib.IMAP4_SSL,
     uid: str,
     allowed_senders: list[str],
+    folder: str = "",
 ) -> EmailPreview | None:
     """Fetch headers + body structure for one UID and build an EmailPreview."""
     try:
@@ -154,6 +170,7 @@ def _build_preview(
             subject=subject,
             sender=sender_hdr,
             date=date_hdr,
+            folder=folder,
             has_pdf=has_pdf,
             pdf_count=pdf_count,
             matches_filter=matches,

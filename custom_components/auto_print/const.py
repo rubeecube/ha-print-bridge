@@ -12,6 +12,7 @@ CONF_PRINTER_NAME = "printer_name"
 # Options-flow keys — editable after setup via "Configure"
 # ---------------------------------------------------------------------------
 CONF_ALLOWED_SENDERS = "allowed_senders"   # list[str]; empty = accept all
+CONF_FOLDER_FILTER = "folder_filter"       # list[str]; empty = accept all folders
 CONF_DUPLEX_MODE = "duplex_mode"
 CONF_BOOKLET_PATTERNS = "booklet_patterns"  # list[str]
 CONF_AUTO_DELETE = "auto_delete"

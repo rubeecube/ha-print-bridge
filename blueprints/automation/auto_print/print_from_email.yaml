@@ -65,6 +65,20 @@ blueprint:
       selector:
         text:
 
+    # ── IMAP folder filter ────────────────────────────────────────────────
+
+    folder_filter:
+      name: IMAP Folder Filter (optional)
+      description: >
+        Comma-separated IMAP folder names. Only emails arriving in one of these
+        folders will trigger a print job. Leave empty to accept all folders.
+
+        Use the exact folder name as configured in your IMAP integration, e.g.
+        `INBOX`, `INBOX/Print`, `INBOX.Print` (separator depends on your server).
+      default: ""
+      selector:
+        text:
+
     # ── Default duplex setting ────────────────────────────────────────────
 
     default_duplex:
@@ -155,6 +169,7 @@ trigger:
 variables:
   imap_entry_id: !input imap_entry_id
   allowed_senders_raw: !input allowed_senders
+  folder_filter_raw: !input folder_filter
   subject_filter_raw: !input subject_filter
   default_duplex: !input default_duplex
   one_sided_kw_raw: !input one_sided_subject_keywords
@@ -164,6 +179,9 @@ variables:
   mark_as_seen: !input mark_as_seen
 
   # Normalised lists (lowercased, whitespace-trimmed, empty strings removed)
+  _folder_list: >
+    {{ folder_filter_raw | string | split(',')
+       | map('trim') | reject('eq', '') | list }}
   _sender_list: >
     {{ allowed_senders_raw | string | lower | split(',')
        | map('trim') | reject('eq', '') | list }}
@@ -181,6 +199,7 @@ variables:
        | map('trim') | reject('eq', '') | list }}
 
   # Shortcuts from the event
+  _folder: "{{ trigger.event.data.folder }}"
   _sender: "{{ trigger.event.data.sender | lower }}"
   _subject: "{{ trigger.event.data.subject | lower }}"
   _uid: "{{ trigger.event.data.uid | string }}"
@@ -205,6 +224,11 @@ variables:
 # ── Conditions ──────────────────────────────────────────────────────────────
 
 condition:
+  - alias: "Email folder is in the allowed list (or list is empty)"
+    condition: template
+    value_template: >
+      {{ _folder_list | count == 0 or _folder in _folder_list }}
+
   - alias: "Sender is in the allowed list (or list is empty)"
     condition: template
     value_template: >

@@ -35,8 +35,10 @@
     "step": {
       "init": {
         "title": "Auto Print Options",
+        "description": "Your IMAP integrations monitor: {imap_folders}",
         "data": {
           "allowed_senders": "Allowed Senders (one per line)",
+          "folder_filter": "IMAP Folder Filter (one per line)",
           "imap_account": "Add sender from IMAP account",
           "duplex_mode": "Default Duplex Mode",
           "booklet_patterns": "Booklet Filename Patterns (one per line)",
@@ -45,6 +47,7 @@
         },
         "data_description": {
           "allowed_senders": "Only emails from these addresses trigger a print job. Leave empty to accept all senders.",
+          "folder_filter": "Only process emails arriving in these IMAP folders. Leave empty to accept all folders. Use the exact folder name shown in parentheses above (e.g. INBOX, INBOX/Print).",
           "imap_account": "Select an account to append its email address to Allowed Senders automatically.",
           "booklet_patterns": "If the PDF filename contains any of these substrings it is printed as a booklet (two-sided short-edge, pages reordered).",
           "queue_folder": "Folder where PDFs are saved when using the print_file service. Must be writable by Home Assistant."

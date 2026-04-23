@@ -32,6 +32,7 @@ from .const import (
     CONF_BOOKLET_PATTERNS,
     CONF_CUPS_URL,
     CONF_DUPLEX_MODE,
+    CONF_FOLDER_FILTER,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
     DEFAULT_AUTO_DELETE,
@@ -138,6 +139,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     def _allowed_senders(self) -> list[str]:
         return [s.lower() for s in self._entry.options.get(CONF_ALLOWED_SENDERS, [])]
 
+    @property
+    def _folder_filter(self) -> list[str]:
+        """IMAP folder names to accept; empty list means accept all folders."""
+        return [f.strip() for f in self._entry.options.get(CONF_FOLDER_FILTER, []) if f.strip()]
+
     # ------------------------------------------------------------------
     # IMAP event handler
     # ------------------------------------------------------------------
@@ -148,6 +154,15 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         allowed = self._allowed_senders
         if allowed and sender not in allowed:
             logger.debug("Skipping email from %s (not in allowed_senders)", sender)
+            return
+
+        ev_folder: str = event.data.get("folder", "")
+        folder_filter = self._folder_filter
+        if folder_filter and ev_folder not in folder_filter:
+            logger.debug(
+                "Skipping email in folder '%s' (not in folder_filter: %s)",
+                ev_folder, folder_filter,
+            )
             return
 
         parts: dict[str, dict[str, Any]] = event.data.get("parts", {})
@@ -321,14 +336,20 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         password: str = data.get("password", "")
         folder: str = data.get("folder", "INBOX")
         allowed = self._allowed_senders
+        folder_filter = self._folder_filter
+
+        # For the preview, search the explicitly configured folders if set;
+        # otherwise fall back to the IMAP entry's monitored folder.
+        folders_to_search = folder_filter if folder_filter else [folder]
 
         logger.debug(
-            "Running filter preview for %s@%s folder=%s senders=%s",
-            username, server, folder, allowed or "all",
+            "Running filter preview for %s@%s folders=%s senders=%s",
+            username, server, folders_to_search, allowed or "all",
         )
 
         emails = await self.hass.async_add_executor_job(
-            preview_mailbox, server, port, use_ssl, username, password, folder, allowed
+            preview_mailbox, server, port, use_ssl, username, password,
+            folders_to_search, allowed,
         )
 
         matching = [e for e in emails if e.matches_filter]

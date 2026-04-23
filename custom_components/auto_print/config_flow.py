@@ -24,6 +24,7 @@ from .const import (
     CONF_BOOKLET_PATTERNS,
     CONF_CUPS_URL,
     CONF_DUPLEX_MODE,
+    CONF_FOLDER_FILTER,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
     DEFAULT_AUTO_DELETE,
@@ -285,21 +286,37 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 for s in raw_senders.splitlines()
                 if s.strip()
             ]
+            folders = [
+                f.strip()
+                for f in user_input.get(CONF_FOLDER_FILTER, "").splitlines()
+                if f.strip()
+            ]
             return self.async_create_entry(
                 title="",
                 data={
                     **user_input,
                     CONF_BOOKLET_PATTERNS: patterns,
                     CONF_ALLOWED_SENDERS: senders,
+                    CONF_FOLDER_FILTER: folders,
                 },
             )
 
         current_patterns = options.get(CONF_BOOKLET_PATTERNS, [])
         current_senders = options.get(CONF_ALLOWED_SENDERS, [])
+        current_folders = options.get(CONF_FOLDER_FILTER, [])
+
+        # Build a hint about which folders the configured IMAP entries monitor.
+        imap_folder_hint = ", ".join(
+            f"{e.data.get('folder', 'INBOX')} ({e.data.get('username', e.title)})"
+            for e in imap_entries
+        ) or "none configured yet"
 
         schema_dict: dict = {
             vol.Required(
                 CONF_ALLOWED_SENDERS, default="\n".join(current_senders)
+            ): str,
+            vol.Required(
+                CONF_FOLDER_FILTER, default="\n".join(current_folders)
             ): str,
             vol.Required(
                 CONF_DUPLEX_MODE,
@@ -327,6 +344,7 @@ class AutoPrintOptionsFlow(OptionsFlow):
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema_dict),
+            description_placeholders={"imap_folders": imap_folder_hint},
         )
 
 

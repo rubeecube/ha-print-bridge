@@ -102,10 +102,10 @@ cards:
 
       **{{ state_attr('sensor.auto_print_PRINTER_NAME_filter_preview', 'total_found') }}** emails scanned  ·  **{{ state_attr('sensor.auto_print_PRINTER_NAME_filter_preview', 'matching_filter') }}** match filter  ·  **{{ state_attr('sensor.auto_print_PRINTER_NAME_filter_preview', 'with_pdf') }}** have a PDF
 
-      | Date | Subject | From | Match | PDF |
-      |------|---------|------|:-----:|:---:|
+      | Date | Subject | From | Folder | Match | PDF |
+      |------|---------|------|--------|:-----:|:---:|
       {% for e in preview %}
-      | {{ e.date | truncate(16, true, '') }} | {{ e.subject | truncate(40) }} | {{ e.sender | truncate(30) }} | {{ '✅' if e.matches_filter else '⬜' }} | {{ '📄 ×' ~ e.pdf_count if e.has_pdf else '—' }} |
+      | {{ e.date | truncate(16, true, '') }} | {{ e.subject | truncate(35) }} | {{ e.sender | truncate(25) }} | {{ e.folder }} | {{ '✅' if e.matches_filter else '⬜' }} | {{ '📄 ×' ~ e.pdf_count if e.has_pdf else '—' }} |
       {% endfor %}
       {% endif %}
 
