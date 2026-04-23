@@ -24,6 +24,7 @@ from .const import (
     FIELD_BOOKLET,
     FIELD_DUPLEX,
     FIELD_FILE_PATH,
+    CONF_AUTO_PRINT_ENABLED,
     SERVICE_CHECK_FILTER,
     SERVICE_CLEAR_QUEUE,
     SERVICE_PRINT_EMAIL,
@@ -60,6 +61,27 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
 AutoPrintConfigEntry: TypeAlias = ConfigEntry[AutoPrintCoordinator]
 
 
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Install bundled blueprints into the user's config dir on first run."""
+    import shutil
+    from pathlib import Path as _Path
+
+    def _install_blueprints() -> None:
+        src = _Path(__file__).parent / "blueprints"
+        if not src.exists():
+            return
+        dst = _Path(hass.config.config_dir) / "blueprints"
+        for src_file in src.rglob("*.yaml"):
+            dst_file = dst / src_file.relative_to(src)
+            if not dst_file.exists():
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_file, dst_file)
+                logger.info("Installed Print Bridge blueprint: %s", dst_file.name)
+
+    await hass.async_add_executor_job(_install_blueprints)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -> bool:
     """Set up Print Bridge from a config entry."""
     coordinator = AutoPrintCoordinator(hass, entry)
@@ -69,6 +91,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) ->
     entry.runtime_data = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # First-install notification when auto_print is disabled (default after fresh install).
+    if not entry.options.get(CONF_AUTO_PRINT_ENABLED, True):
+        hass.components.persistent_notification.async_create(  # type: ignore[attr-defined]
+            (
+                "**Print Bridge is installed!** \n\n"
+                "Automatic printing is **disabled** until you choose a mode:\n\n"
+                "1. **Simple auto-print** — go to *Settings → Print Bridge → Configure* "
+                "and turn on *Enable automatic printing*.\n"
+                "2. **Blueprint (advanced)** — "
+                "[import the automation blueprint]"
+                "(https://my.home-assistant.io/redirect/blueprint_import"
+                "?url=https%3A%2F%2Fgithub.com%2Frubeecube%2Fha-print-bridge%2Fblob"
+                "%2Fmain%2Fbluprints%2Fautomation%2Fprint_bridge%2Fprint_from_email.yaml) "
+                "for per-sender / per-keyword rules.\n\n"
+                "To add the management dashboard, paste "
+                "`lovelace/print_bridge_audit.yaml` into a new dashboard view."
+            ),
+            title="Print Bridge — Action required",
+            notification_id=f"print_bridge_setup_{entry.entry_id}",
+        )
 
     # Subscribe to imap_content events from HA's built-in IMAP integration.
     entry.async_on_unload(

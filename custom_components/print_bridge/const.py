@@ -32,6 +32,7 @@ CONF_NOTIFY_ON_SUCCESS = "notify_on_success"       # send HA notification when p
 CONF_SCHEDULE_ENABLED = "schedule_enabled"         # enable print time window
 CONF_SCHEDULE_START = "schedule_start"             # "HH:MM" — start of allowed window
 CONF_SCHEDULE_END = "schedule_end"                 # "HH:MM" — end of allowed window
+CONF_AUTO_PRINT_ENABLED = "auto_print_enabled"     # automatically print on imap_content event
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -45,6 +46,7 @@ DEFAULT_EMAIL_ARCHIVE_FOLDER = "INBOX/Printed"
 DEFAULT_NOTIFY_ON_FAILURE = True
 DEFAULT_NOTIFY_ON_SUCCESS = False
 DEFAULT_SCHEDULE_ENABLED = False
+DEFAULT_AUTO_PRINT_ENABLED = True  # enabled by default; set False on first install
 DEFAULT_SCHEDULE_START = "07:00"
 DEFAULT_SCHEDULE_END = "22:00"
 

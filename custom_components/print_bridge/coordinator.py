@@ -40,6 +40,7 @@ from .const import (
     CONF_NOTIFY_ON_SUCCESS,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
+    CONF_AUTO_PRINT_ENABLED,
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_END,
     CONF_SCHEDULE_START,
@@ -50,6 +51,7 @@ from .const import (
     DEFAULT_NOTIFY_ON_FAILURE,
     DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_QUEUE_FOLDER,
+    DEFAULT_AUTO_PRINT_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
     DEFAULT_SCHEDULE_END,
     DEFAULT_SCHEDULE_START,
@@ -228,6 +230,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return [f.strip() for f in self._entry.options.get(CONF_FOLDER_FILTER, []) if f.strip()]
 
     @property
+    def _auto_print_enabled(self) -> bool:
+        """True if the coordinator should automatically print on imap_content events."""
+        return bool(self._entry.options.get(CONF_AUTO_PRINT_ENABLED, DEFAULT_AUTO_PRINT_ENABLED))
+
+    @property
     def _schedule_enabled(self) -> bool:
         return bool(self._entry.options.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED))
 
@@ -278,6 +285,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
     async def async_handle_imap_event(self, event: Event) -> None:
         """Process an imap_content event from HA's built-in IMAP integration."""
+        if not self._auto_print_enabled:
+            logger.debug(
+                "Auto-print disabled — ignoring imap_content event from %s "
+                "(enable in Options or use the automation blueprint)",
+                event.data.get("sender", "?"),
+            )
+            return
+
         sender: str = event.data.get("sender", "").lower()
         allowed = self._allowed_senders
         if allowed and sender not in allowed:
@@ -595,11 +610,16 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         effective_duplex = duplex_mode or self._duplex_mode
         booklet = force_booklet or is_booklet_job(filename, self._booklet_patterns)
 
-        try:
-            with open(file_path, "rb") as f:
-                pdf_data = f.read()
-        except OSError as exc:
-            result = PrintJobResult(filename=filename, success=False, error=str(exc))
+        def _read_file() -> bytes | None:
+            try:
+                with open(file_path, "rb") as f:
+                    return f.read()
+            except OSError:
+                return None
+
+        pdf_data = await self.hass.async_add_executor_job(_read_file)
+        if pdf_data is None:
+            result = PrintJobResult(filename=filename, success=False, error=f"Cannot read {file_path}")
             self._record_job(result)
             return result
 
@@ -681,17 +701,22 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     async def async_clear_queue(self) -> int:
         """Delete all PDFs in the configured queue folder."""
         folder = self._queue_folder
-        deleted = 0
-        try:
-            for name in os.listdir(folder):
-                if name.lower().endswith(".pdf"):
-                    try:
-                        os.remove(os.path.join(folder, name))
-                        deleted += 1
-                    except OSError:
-                        logger.warning("Could not delete %s/%s", folder, name)
-        except OSError:
-            logger.warning("Could not list queue folder '%s'", folder)
+
+        def _do_clear() -> int:
+            deleted = 0
+            try:
+                for name in os.listdir(folder):
+                    if name.lower().endswith(".pdf"):
+                        try:
+                            os.remove(os.path.join(folder, name))
+                            deleted += 1
+                        except OSError:
+                            logger.warning("Could not delete %s/%s", folder, name)
+            except OSError:
+                logger.warning("Could not list queue folder '%s'", folder)
+            return deleted
+
+        deleted = await self.hass.async_add_executor_job(_do_clear)
         await self.async_request_refresh()
         return deleted
 
@@ -783,7 +808,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     async def _async_update_data(self) -> AutoPrintData:
         """Check printer reachability, queue depth, and flush pending if schedule just opened."""
         printer_online = await self._async_check_printer_online()
-        queue_depth = self._count_queue_files()
+        queue_depth = await self.hass.async_add_executor_job(self._count_queue_files)
 
         # Auto-flush pending jobs when the print window opens.
         currently_open = self._is_within_schedule()

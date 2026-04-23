@@ -12,6 +12,8 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+import urllib.parse
+
 from .const import (
     ATTR_LAST_FILENAME,
     ATTR_LAST_STATUS,
@@ -46,9 +48,16 @@ async def async_setup_entry(
 
 
 def _device_info(entry: ConfigEntry) -> DeviceInfo:
+    # Safe for both CUPS mode (has CONF_PRINTER_NAME) and Direct IPP mode (has CONF_DIRECT_PRINTER_URL).
+    from .const import CONF_DIRECT_PRINTER_URL
+    printer_label = (
+        entry.data.get(CONF_PRINTER_NAME)
+        or urllib.parse.urlparse(entry.data.get(CONF_DIRECT_PRINTER_URL, "")).hostname
+        or "Printer"
+    )
     return DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
-        name=f"Print Bridge — {entry.data[CONF_PRINTER_NAME]}",
+        name=f"Print Bridge — {printer_label}",
         manufacturer="Print Bridge",
         model="Email → IPP Bridge",
         entry_type=DeviceEntryType.SERVICE,

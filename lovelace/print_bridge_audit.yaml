@@ -1,141 +1,131 @@
-# Print Bridge — Audit Dashboard View
+# Print Bridge — Management Dashboard
 #
-# How to add this view to your Home Assistant dashboard:
+# SETUP (one-time):
+#   1. Open any dashboard → Edit → Add View → YAML
+#   2. Paste this entire file
+#   3. Replace YOUR_SLUG with your printer's entity slug
+#      (search "print_bridge" in Developer Tools → States to find it,
+#       e.g. "canonmg3600series" or "testprinter")
 #
-#   1. Open your dashboard → Edit → Add View → Manual Configuration (YAML)
-#   2. Paste the CONTENTS of this file as the view YAML.
-#   OR
-#   1. In configuration.yaml add the lovelace section and reference this file.
-#
-# Replace PRINTER_NAME with the CUPS queue name used during setup
-# (e.g. Canon_MG3600_series).  Entity IDs follow the pattern:
-#   sensor.print_bridge_{slug}_job_log
-#   sensor.print_bridge_{slug}_last_print_job
-#   binary_sensor.print_bridge_{slug}_printer_online
-#
-# The entity slugs are derived from the printer name — open Developer Tools →
-# States and search "print_bridge" to find the exact IDs for your setup.
+# After setup you can also find entities at:
+#   Settings → Devices & Services → Print Bridge → click the device
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
-title: Print Audit
-path: print-bridge-audit
-icon: mdi:printer-eye
+title: Print Bridge
+path: print-bridge
+icon: mdi:printer-wireless
 
 cards:
 
-  # ── Status row ─────────────────────────────────────────────────────────────
-  - type: horizontal-stack
-    cards:
-      - type: entity
-        entity: binary_sensor.print_bridge_PRINTER_NAME_printer_online
-        name: Printer Online
-        icon: mdi:printer-check
-        state_color: true
-
-      - type: entity
-        entity: sensor.print_bridge_PRINTER_NAME_print_queue_depth
-        name: Queue Depth
-        icon: mdi:file-multiple
-
-      - type: entity
-        entity: sensor.print_bridge_PRINTER_NAME_scheduled_queue
-        name: Scheduled Queue
-        icon: mdi:clock-outline
-        state_color: true
-
-      - type: entity
-        entity: sensor.print_bridge_PRINTER_NAME_job_log
-        name: Jobs Sent
-        icon: mdi:counter
-
-      - type: entity
-        entity: sensor.print_bridge_PRINTER_NAME_last_print_job
-        name: Last Job
-        icon: mdi:file-check
-
-  # ── Logbook ────────────────────────────────────────────────────────────────
-  - type: logbook
-    title: Print Event Log
-    hours_to_show: 168    # 7 days
-    entities:
-      - sensor.print_bridge_PRINTER_NAME_job_log
-      - sensor.print_bridge_PRINTER_NAME_last_print_job
-
-  # ── Recent jobs table (Markdown) ───────────────────────────────────────────
+  # ── Dynamic status — no slug needed (auto-detects entities) ───────────────
   - type: markdown
-    title: Recent Print Jobs (last 50)
     content: |
-      {% set jobs = state_attr('sensor.print_bridge_PRINTER_NAME_job_log', 'jobs') %}
-      {% if jobs is none or jobs | count == 0 %}
-      *No print jobs recorded yet.*
-      {% else %}
-      | # | Time | File | Status | Sender | Duplex | Retry |
-      |---|------|------|:------:|--------|--------|:-----:|
-      {% for j in jobs %}
-      | {{ j.index }} | {{ j.timestamp | as_datetime | as_local | strftime('%d/%m %H:%M') }} | `{{ j.filename }}` | {{ '✅' if j.success else '❌' }} | {{ j.sender or '—' }} | {{ j.duplex or '—' }} | {{ '🔄' if j.can_retry else '—' }} |
-      {% endfor %}
+      {% set online = (states.binary_sensor | selectattr('entity_id', 'search', 'print_bridge.*printer_online') | list | first | default(none)) %}
+      {% set last   = (states.sensor | selectattr('entity_id', 'search', 'print_bridge.*last_print_job') | list | first | default(none)) %}
+      {% set jobs   = (states.sensor | selectattr('entity_id', 'search', 'print_bridge.*job_log') | list | first | default(none)) %}
+      {% set queue  = (states.sensor | selectattr('entity_id', 'search', 'print_bridge.*print_queue_depth') | list | first | default(none)) %}
+      {% set sched  = (states.sensor | selectattr('entity_id', 'search', 'print_bridge.*scheduled_queue') | list | first | default(none)) %}
 
-      *🔄 = retryable — use index with `print_bridge.retry_job`*
-      {% endif %}
+      ## Print Bridge
 
-  # ── Statistics graph ───────────────────────────────────────────────────────
-  - type: statistics-graph
-    title: Print Activity
-    entities:
-      - entity: sensor.print_bridge_PRINTER_NAME_job_log
-        name: Jobs Sent
-    period:
-      calendar:
-        period: day
-    stat_types:
-      - max
-    days_to_show: 30
+      | Printer | Last Job | Queue | Scheduled | Total Jobs |
+      |:-------:|:--------:|:-----:|:---------:|:----------:|
+      | {{ '🟢 Online' if online and online.state == 'on' else ('🔴 Offline' if online else '❓ Unknown') }} | {{ ('✅ ' if last and last.state == 'success' else ('❌ ' if last else '')) ~ (last.state if last else '—') }} | {{ queue.state if queue else '—' }} | {{ sched.state if sched else '—' }} | {{ jobs.state if jobs else '—' }} |
 
-  # ── Filter preview ─────────────────────────────────────────────────────────
-  - type: entity
-    entity: sensor.print_bridge_PRINTER_NAME_filter_preview
-    name: Matching Emails (last check)
-    icon: mdi:email-search
+  # ── Action grid ────────────────────────────────────────────────────────────
+  - type: grid
+    square: false
+    columns: 2
+    cards:
+      - type: button
+        name: Scan Mailbox
+        icon: mdi:email-search
+        entity: button.print_bridge_YOUR_SLUG_check_filter
+        hold_action:
+          action: none
+        tap_action:
+          action: toggle
 
+      - type: button
+        name: Print Test Page
+        icon: mdi:printer-check
+        entity: button.print_bridge_YOUR_SLUG_print_test_page
+        tap_action:
+          action: toggle
+
+      - type: button
+        name: Retry Last Failed
+        icon: mdi:printer-alert
+        entity: button.print_bridge_YOUR_SLUG_retry_last_failed_job
+        tap_action:
+          action: toggle
+
+      - type: button
+        name: Print Queued Jobs
+        icon: mdi:printer-pos
+        entity: button.print_bridge_YOUR_SLUG_print_queued_jobs_now
+        tap_action:
+          action: toggle
+
+  # ── Blueprint install (no slug needed) ────────────────────────────────────
+  - type: button
+    name: Install Automation Blueprint
+    icon: mdi:puzzle-plus
+    tap_action:
+      action: url
+      url_path: "https://my.home-assistant.io/redirect/blueprint_import?url=https%3A%2F%2Fgithub.com%2Frubeecube%2Fha-print-bridge%2Fblob%2Fmain%2Fbluprints%2Fautomation%2Fprint_bridge%2Fprint_from_email.yaml"
+
+  # ── Mailbox scan results (auto-detected, no slug) ─────────────────────────
   - type: markdown
     title: Mailbox — Matching Emails
     content: |
-      {% set preview = state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'emails') %}
-      {% set checked = state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'checked_at') %}
-      {% if preview is none or preview | count == 0 %}
-      *No check run yet. Press **Check Filter** to scan the mailbox.*
+      {% set s = (states.sensor | selectattr('entity_id', 'search', 'print_bridge.*filter_preview') | list | first | default(none)) %}
+      {% if s is none %}
+      *Integration not loaded yet.*
       {% else %}
-      **Last checked:** {{ checked }}  ·  **Account:** {{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'imap_account') }}
+      {% set preview = state_attr(s.entity_id, 'emails') %}
+      {% set checked = state_attr(s.entity_id, 'checked_at') %}
+      {% if preview is none or preview | count == 0 %}
+      *No scan run yet. Press **Scan Mailbox** above to check your inbox.*
+      {% else %}
+      **Scanned:** {{ checked }}  ·  **Account:** {{ state_attr(s.entity_id, 'imap_account') }}
+      **{{ state_attr(s.entity_id, 'total_found') }}** found  ·  **{{ state_attr(s.entity_id, 'matching_filter') }}** match filter  ·  **{{ state_attr(s.entity_id, 'with_pdf') }}** have PDF
 
-      **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'total_found') }}** emails scanned  ·  **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'matching_filter') }}** match filter  ·  **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'with_pdf') }}** have PDF
-
-      | UID | Date | Subject | From | PDF | Print |
-      |-----|------|---------|------|:---:|-------|
-      {% for e in preview %}
-      | `{{ e.uid }}` | {{ e.date | truncate(14, true, '') }} | {{ e.subject | truncate(30) }} | {{ e.sender | truncate(22) }} | {{ '📄×' ~ e.pdf_count if e.has_pdf else '—' }} | {% if e.has_pdf %}`print_email(uid={{ e.uid }})`{% else %}—{% endif %} |
+      | UID | Subject | From | PDF | How to print |
+      |-----|---------|------|:---:|-------------|
+      {% for e in preview | selectattr('has_pdf') %}
+      | `{{ e.uid }}` | {{ e.subject | truncate(28) }} | {{ e.sender | truncate(20) }} | 📄×{{ e.pdf_count }} | Service: `print_bridge.print_email` uid={{ e.uid }} |
+      {% else %}
+      | — | No emails with PDF found | | | |
       {% endfor %}
-
-      **To print an email:** call service `print_bridge.print_email` with the UID shown above.
-      In Developer Tools → Services, or trigger via an automation.
+      {% endif %}
       {% endif %}
 
-  # ── Quick actions ──────────────────────────────────────────────────────────
+  # ── Recent print jobs (auto-detected, no slug) ────────────────────────────
+  - type: markdown
+    title: Recent Print Jobs
+    content: |
+      {% set s = (states.sensor | selectattr('entity_id', 'search', 'print_bridge.*job_log') | list | first | default(none)) %}
+      {% if s is none %}
+      *No jobs recorded yet.*
+      {% else %}
+      {% set jobs = state_attr(s.entity_id, 'jobs') %}
+      {% if jobs is none or jobs | count == 0 %}
+      *No print jobs yet. Send a test email or press Print Test Page.*
+      {% else %}
+      | Time | File | Status | Sender | Retry |
+      |------|------|:------:|--------|:-----:|
+      {% for j in jobs[:10] %}
+      | {{ j.timestamp | as_datetime | as_local | strftime('%d/%m %H:%M') }} | `{{ j.filename | truncate(25) }}` | {{ '✅' if j.success else '❌' }} | {{ j.sender or '—' }} | {{ ('`retry_job(idx=' ~ j.index ~ ')`') if j.can_retry else '—' }} |
+      {% endfor %}
+      {% endif %}
+      {% endif %}
+
+  # ── Quick actions (services) ───────────────────────────────────────────────
   - type: entities
-    title: Actions
+    title: Management
     entities:
-      - entity: button.print_bridge_PRINTER_NAME_print_queued_jobs_now
-        name: Print Queued Jobs Now (bypass schedule)
-
-      - entity: button.print_bridge_PRINTER_NAME_retry_last_failed_job
-        name: Retry Last Failed Job
-
-      - entity: button.print_bridge_PRINTER_NAME_check_filter
-        name: Check Filter (scan mailbox)
-
-      - entity: button.print_bridge_PRINTER_NAME_print_test_page
-        name: Print Test Page
-
       - type: button
         name: Clear Print Queue
         icon: mdi:delete-sweep
@@ -143,3 +133,13 @@ cards:
         tap_action:
           action: call-service
           service: print_bridge.clear_queue
+
+      - type: weblink
+        name: Open Integration Settings
+        url: /config/integrations/integration/print_bridge
+        icon: mdi:cog
+
+      - type: weblink
+        name: View Logbook (Print Bridge)
+        url: /logbook?entity_id=sensor.print_bridge_YOUR_SLUG_job_log
+        icon: mdi:history

@@ -36,6 +36,7 @@ from .const import (
     CONF_NOTIFY_ON_SUCCESS,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
+    CONF_AUTO_PRINT_ENABLED,
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_END,
     CONF_SCHEDULE_START,
@@ -47,6 +48,7 @@ from .const import (
     DEFAULT_NOTIFY_ON_FAILURE,
     DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_QUEUE_FOLDER,
+    DEFAULT_AUTO_PRINT_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
     DEFAULT_SCHEDULE_END,
     DEFAULT_SCHEDULE_START,
@@ -70,11 +72,11 @@ _CUPS_PROBE_URLS = [
     "http://homeassistant.local:631",
 ]
 
-# mDNS service types for IPP/AirPrint printers
+# mDNS service types for IPP/AirPrint printers.
+# NOTE: _printer._tcp.local. is the LPD/LPR protocol (port 515) — NOT IPP. Excluded intentionally.
 _IPP_SERVICE_TYPES = [
     "_ipp._tcp.local.",
     "_ipps._tcp.local.",
-    "_printer._tcp.local.",
 ]
 
 # How long to wait for mDNS responses (seconds).
@@ -166,8 +168,22 @@ async def _discover_printers_mdns(hass: HomeAssistant) -> list[dict[str, str]]:
             if isinstance(rp_raw, bytes)
             else "ipp/print"
         )
-        scheme = "https" if "ipps" in type_ else "http"
-        url = f"{scheme}://{host}:{port}/{rp.lstrip('/')}"
+
+        # Skip CUPS-specific virtual paths that won't work for direct IPP.
+        _BAD_PATHS = {"ipp/auto", "auto"}
+        if rp.lower().strip("/") in _BAD_PATHS:
+            logger.debug("Skipping mDNS printer %s — path '%s' is a CUPS virtual queue", host, rp)
+            return
+        if rp.lower().startswith("printers/"):
+            # CUPS queue path; use standard AirPrint path instead.
+            rp = "ipp/print"
+
+        # For IPPS (_ipps._tcp.local.) use HTTP on port 80 — home printers have self-signed certs
+        # that fail SSL verification, but the same printer accepts plain IPP on port 80.
+        if "ipps" in type_:
+            url = f"http://{host}/ipp/print"
+        else:
+            url = f"http://{host}:{port}/{rp.lstrip('/')}"
         display = name.rstrip(".").split(".")[0]
         with lock:
             if url not in found:
@@ -311,7 +327,8 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
                 elif check_url.startswith("ipps://"):
                     check_url = "https://" + check_url[len("ipps://"):]
                 try:
-                    session = async_get_clientsession(self.hass)
+                    # verify_ssl=False: home printers use self-signed/no certificates
+                    session = async_get_clientsession(self.hass, verify_ssl=False)
                     async with session.head(
                         check_url, timeout=aiohttp.ClientTimeout(total=5)
                     ) as resp:
@@ -411,7 +428,7 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
         self, direct_url: str, display_name: str, imap_sel: str
     ) -> ConfigFlowResult:
         """Create a config entry for direct IPP mode (no CUPS)."""
-        initial_options: dict[str, Any] = {}
+        initial_options: dict[str, Any] = {CONF_AUTO_PRINT_ENABLED: False}  # disabled until user configures
         email = _email_from_imap_entry(imap_sel, self._imap_entries)
         if email:
             initial_options[CONF_ALLOWED_SENDERS] = [email]
@@ -429,7 +446,7 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
         self, cups_url: str, printer_name: str, imap_sel: str
     ) -> ConfigFlowResult:
         """Set unique_id, build initial options and create the config entry."""
-        initial_options: dict[str, Any] = {}
+        initial_options: dict[str, Any] = {CONF_AUTO_PRINT_ENABLED: False}  # disabled until user configures
         email = _email_from_imap_entry(imap_sel, self._imap_entries)
         if email:
             initial_options[CONF_ALLOWED_SENDERS] = [email]
@@ -515,6 +532,10 @@ class AutoPrintOptionsFlow(OptionsFlow):
         ) or "none configured yet"
 
         schema_dict: dict = {
+            vol.Required(
+                CONF_AUTO_PRINT_ENABLED,
+                default=options.get(CONF_AUTO_PRINT_ENABLED, DEFAULT_AUTO_PRINT_ENABLED),
+            ): bool,
             vol.Required(
                 CONF_ALLOWED_SENDERS, default="\n".join(current_senders)
             ): str,
