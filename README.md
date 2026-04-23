@@ -35,14 +35,44 @@ for booklet printing, and sends an IPP/2.0 `Print-Job` directly to CUPS.
 
 ## Prerequisites
 
-### 1. HA IMAP Integration (built-in)
+### HA integrations — what is and isn't needed
+
+| Integration | Required? | Role |
+|---|:---:|---|
+| **HA IMAP** (built-in) | **Yes** | Fires `imap_content` events when email arrives. Print Bridge listens to these. |
+| **HA IPP** (built-in) | **No** | Monitors printer status (ink, paper, errors). Print Bridge does **not** use it — Print Bridge *is* its own IPP client and sends `Print-Job` packets directly. |
+| **CUPS add-on** | Optional | Needed for USB printers or non-AirPrint printers that require driver conversion. AirPrint printers can be reached directly via IPP. |
+
+> **Why not the HA IPP integration?**
+> HA's built-in `ipp` integration ([docs](https://www.home-assistant.io/integrations/ipp/)) is a *monitoring* tool — it reads printer state, ink levels, and page counts.
+> Print Bridge bypasses it entirely and speaks raw IPP/2.0 directly to the printer or CUPS server.
+> You can install both side-by-side: use the HA IPP integration to monitor ink/status,
+> and Print Bridge to receive and dispatch print jobs.
+
+---
+
+### 1. HA IMAP Integration (built-in) — **required**
 
 > Settings → Devices & Services → Add Integration → **IMAP**
 
 Configure it with your mail server details.
 Print Bridge listens to the `imap_content` events it fires — **no credentials are stored in Print Bridge**.
 
-### 2. CUPS Print Server
+### 2. Printer — choose one
+
+#### Option A — Direct IPP (no extra software needed)
+
+Any WiFi printer with AirPrint support (manufactured after ~2012) has a built-in IPP server.
+Print Bridge can send jobs directly to the printer's endpoint, for example:
+
+```
+http://10.0.0.23/ipp/print        (standard AirPrint path)
+http://10.0.0.23:631/ipp/print    (CUPS-style port)
+```
+
+No add-ons, no CUPS required. Set this URL in the **Direct IPP Printer URL** field during setup.
+
+#### Option B — Via CUPS (for USB or legacy printers)
 
 The recommended option for HA OS is the **[CUPS add-on by peternicholls](https://github.com/peternicholls/ha-cups-addon)**:
 
@@ -346,6 +376,16 @@ A: Configure **Email Action after Printing** in Options: **Mark as read** keeps 
 
 **Q: How do I get notified when a print job fails?**  
 A: **Notify when print fails** is enabled by default. A HA persistent notification will appear in the bell (🔔) menu with the filename and error. Enable **Notify when print succeeds** if you also want confirmation of successful prints.
+
+**Q: Do I need to install HA's built-in IPP integration?**  
+A: No. HA's `ipp` integration ([docs](https://www.home-assistant.io/integrations/ipp/)) is a *printer monitor* — it reads ink levels, paper status, and error codes. Print Bridge is its own IPP client: it builds raw IPP/2.0 `Print-Job` packets and sends them directly to the printer or CUPS server via HTTP POST. The two integrations are independent and can be installed side-by-side.
+
+| | HA IPP integration | Print Bridge |
+|---|---|---|
+| **Purpose** | Monitor printer state (ink, errors) | Send print jobs from email |
+| **Protocol** | Reads IPP attributes | Writes IPP Print-Job |
+| **Required for printing** | No | Yes |
+| **Useful together** | Yes — monitors the same printer | Yes — sends jobs to same printer |
 
 **Q: Do I need CUPS at all?**  
 A: Not for modern AirPrint printers. If your printer has an IPP endpoint (most WiFi printers made after ~2015 do), use **Direct IPP mode** with a URL like `http://10.0.0.23/ipp/print`. CUPS is useful when the printer is USB-attached, needs format conversion (PCL/PostScript), or you want a managed queue.
