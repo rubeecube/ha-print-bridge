@@ -1,10 +1,10 @@
-# Auto Print — Docker Validation Stack
+# Print Bridge — Docker Validation Stack
 
 Self-contained stack for end-to-end testing **without** a real IMAP account or physical printer.
 
 | Service | Image | Purpose |
 |---|---|---|
-| `homeassistant` | `ghcr.io/home-assistant/home-assistant:stable` | HA with auto_print mounted |
+| `homeassistant` | `ghcr.io/home-assistant/home-assistant:stable` | HA with print_bridge mounted |
 | `greenmail` | `greenmail/standalone:2.0.0` | Local IMAP + SMTP server |
 | `cups` | Built from `./cups/Dockerfile` | CUPS + cups-pdf virtual printer |
 
@@ -41,9 +41,9 @@ Open [http://localhost:8123](http://localhost:8123) and complete the wizard.
 
 In **advanced mode** → disable IMAP-Push (GreenMail does not support IDLE — use polling).
 
-### 4. Add the Auto Print integration
+### 4. Add the Print Bridge integration
 
-> Settings → Integrations → Add → **Auto Print**
+> Settings → Integrations → Add → **Print Bridge**
 
 | Field | Value |
 |---|---|
@@ -76,7 +76,7 @@ Expected output:
 ========================================
   All validation checks passed!
 ========================================
-  Email injected → HA IMAP → auto_print → CUPS → cups-pdf
+  Email injected → HA IMAP → print_bridge → CUPS → cups-pdf
 ```
 
 ---

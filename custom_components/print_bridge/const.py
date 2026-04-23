@@ -1,6 +1,6 @@
-"""Constants for the Auto Print integration."""
+"""Constants for the Print Bridge integration."""
 
-DOMAIN = "auto_print"
+DOMAIN = "print_bridge"
 
 # ---------------------------------------------------------------------------
 # Config-entry keys — set once during initial setup (printer only)
@@ -91,7 +91,7 @@ BUTTON_RETRY_LAST_FAILED = "retry_last_failed"
 BUTTON_FLUSH_PENDING = "flush_pending"
 
 # Event fired after each print job — appears in HA Logbook
-EVENT_JOB_COMPLETED = "auto_print_job_completed"
+EVENT_JOB_COMPLETED = "print_bridge_job_completed"
 
 # ---------------------------------------------------------------------------
 # State attribute names

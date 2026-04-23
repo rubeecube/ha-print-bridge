@@ -1,4 +1,4 @@
-# Auto Print
+# Print Bridge
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blue.svg)](https://www.home-assistant.io/)
@@ -7,7 +7,7 @@
 
 Print PDF email attachments directly to a network printer — fully inside Home Assistant.
 
-**Auto Print** bridges HA's built-in IMAP integration with a CUPS print server.
+**Print Bridge** bridges HA's built-in IMAP integration with a CUPS print server.
 When an email with a PDF attachment arrives from a matching sender (and folder),
 the component fetches the bytes via `imap.fetch_part`, optionally reorders pages
 for booklet printing, and sends an IPP/2.0 `Print-Job` directly to CUPS.
@@ -24,7 +24,7 @@ for booklet printing, and sends an IPP/2.0 `Print-Job` directly to CUPS.
 | **Folder filter** | Accept only emails arriving in specific IMAP folders (e.g. `INBOX/Print`) |
 | **Duplex control** | One-sided, long-edge (portrait), or short-edge (landscape) per job or globally |
 | **Booklet printing** | Automatic saddle-stitch page reordering for filenames matching a pattern |
-| **Audit log** | Every print job fires `auto_print_job_completed` → appears in HA Logbook |
+| **Audit log** | Every print job fires `print_bridge_job_completed` → appears in HA Logbook |
 | **Job history sensor** | Last 50 jobs with sender, duplex, timestamp as attributes |
 | **Filter preview** | Press a button to scan the mailbox and see which emails would be printed |
 | **Blueprint** | Advanced per-sender/per-keyword rules with folder, duplex, and booklet logic |
@@ -40,7 +40,7 @@ for booklet printing, and sends an IPP/2.0 `Print-Job` directly to CUPS.
 > Settings → Devices & Services → Add Integration → **IMAP**
 
 Configure it with your mail server details.
-Auto Print listens to the `imap_content` events it fires — **no credentials are stored in Auto Print**.
+Print Bridge listens to the `imap_content` events it fires — **no credentials are stored in Print Bridge**.
 
 ### 2. CUPS Print Server
 
@@ -58,15 +58,15 @@ The recommended option for HA OS is the **[CUPS add-on by peternicholls](https:/
 ### HACS (recommended)
 
 1. **HACS → Integrations → ⋮ → Custom repositories**
-2. Add `https://github.com/rubeecube/custom_component_hassio_print` — category **Integration**
-3. Search for **Auto Print** → install → restart HA.
+2. Add `https://github.com/rubeecube/ha-print-bridge` — category **Integration**
+3. Search for **Print Bridge** → install → restart HA.
 
 ### Manual
 
-Copy `custom_components/auto_print/` into your HA config directory and restart:
+Copy `custom_components/print_bridge/` into your HA config directory and restart:
 
 ```
-/config/custom_components/auto_print/
+/config/custom_components/print_bridge/
 ```
 
 ---
@@ -77,9 +77,9 @@ Copy `custom_components/auto_print/` into your HA config directory and restart:
 
 Configure the built-in IMAP integration first (see [Prerequisites](#1-ha-imap-integration-built-in)).
 
-### Step 2 — Add Auto Print
+### Step 2 — Add Print Bridge
 
-> Settings → Devices & Services → Add Integration → **Auto Print**
+> Settings → Devices & Services → Add Integration → **Print Bridge**
 
 The setup wizard auto-discovers both **CUPS** and **direct IPP printers** at common addresses and lists any IMAP accounts already configured in HA.
 
@@ -110,7 +110,7 @@ Use CUPS when: the printer is USB-attached, needs driver/raster conversion, or y
 
 ### Options (editable any time)
 
-> Settings → Devices & Services → Auto Print → **Configure**
+> Settings → Devices & Services → Print Bridge → **Configure**
 
 The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@example.com)"* so you know which exact folder names to use.
 
@@ -133,13 +133,13 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 
 | Entity | Type | State | Key attributes |
 |---|---|---|---|
-| `sensor.auto_print_*_print_queue_depth` | Sensor | File count | — |
-| `sensor.auto_print_*_last_print_job` | Sensor | `success` / `failed` | `last_filename`, `last_status`, `sender`, `duplex`, `booklet`, `timestamp` |
-| `sensor.auto_print_*_job_log` | Sensor | Total jobs sent | `jobs[]` — last 50 print attempts with full metadata |
-| `sensor.auto_print_*_filter_preview` | Sensor | Matching emails with PDF | `emails[]`, `checked_at`, `imap_account`, `total_found`, `matching_filter`, `with_pdf` |
-| `binary_sensor.auto_print_*_printer_online` | Binary Sensor | `on` / `off` | — |
-| `button.auto_print_*_print_test_page` | Button | — | Sends a built-in one-page PDF to the printer |
-| `button.auto_print_*_check_filter` | Button | — | Scans the mailbox and updates `filter_preview` sensor |
+| `sensor.print_bridge_*_print_queue_depth` | Sensor | File count | — |
+| `sensor.print_bridge_*_last_print_job` | Sensor | `success` / `failed` | `last_filename`, `last_status`, `sender`, `duplex`, `booklet`, `timestamp` |
+| `sensor.print_bridge_*_job_log` | Sensor | Total jobs sent | `jobs[]` — last 50 print attempts with full metadata |
+| `sensor.print_bridge_*_filter_preview` | Sensor | Matching emails with PDF | `emails[]`, `checked_at`, `imap_account`, `total_found`, `matching_filter`, `with_pdf` |
+| `binary_sensor.print_bridge_*_printer_online` | Binary Sensor | `on` / `off` | — |
+| `button.print_bridge_*_print_test_page` | Button | — | Sends a built-in one-page PDF to the printer |
+| `button.print_bridge_*_check_filter` | Button | — | Scans the mailbox and updates `filter_preview` sensor |
 
 *`*` is a slug derived from the printer's CUPS queue name.*
 
@@ -147,7 +147,7 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 
 ## Services
 
-### `auto_print.print_file`
+### `print_bridge.print_file`
 
 Print a PDF from the HA filesystem.
 
@@ -157,11 +157,11 @@ Print a PDF from the HA filesystem.
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
 
-### `auto_print.clear_queue`
+### `print_bridge.clear_queue`
 
 Delete all `.pdf` files from the configured queue folder.
 
-### `auto_print.process_imap_part`
+### `print_bridge.process_imap_part`
 
 Fetch a specific IMAP attachment and print it.
 Used internally by the blueprint; callable from any automation or script.
@@ -175,10 +175,10 @@ Used internally by the blueprint; callable from any automation or script.
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
 
-### `auto_print.check_filter`
+### `print_bridge.check_filter`
 
 Connect to IMAP and list emails that match the current filter settings.
-Returns a service response and updates `sensor.auto_print_*_filter_preview`.
+Returns a service response and updates `sensor.print_bridge_*_filter_preview`.
 
 | Field | Required | Description |
 |---|---|---|
@@ -188,14 +188,14 @@ Returns a service response and updates `sensor.auto_print_*_filter_preview`.
 
 ## Audit Log
 
-Every print attempt fires an `auto_print_job_completed` event to the HA event bus.
+Every print attempt fires an `print_bridge_job_completed` event to the HA event bus.
 This event appears in the native HA **Logbook** as a human-readable sentence:
 
-> **Auto Print** — Printed `invoice.pdf`  ·  two-sided-long-edge  ·  from billing@example.com  ·  Canon_MG3600_series
+> **Print Bridge** — Printed `invoice.pdf`  ·  two-sided-long-edge  ·  from billing@example.com  ·  Canon_MG3600_series
 
-> **Auto Print** — Print failed for `bad.pdf`: HTTP 503  ·  from sender@example.com
+> **Print Bridge** — Print failed for `bad.pdf`: HTTP 503  ·  from sender@example.com
 
-The `sensor.auto_print_*_job_log` entity stores the last 50 jobs as attributes,
+The `sensor.print_bridge_*_job_log` entity stores the last 50 jobs as attributes,
 including timestamp, filename, success/failure, sender, duplex mode, and booklet flag.
 
 ---
@@ -203,14 +203,14 @@ including timestamp, filename, success/failure, sender, duplex mode, and booklet
 ## How it works
 
 ```
-Mail Server ──IMAP IDLE──► HA IMAP Integration ──imap_content event──► Auto Print
+Mail Server ──IMAP IDLE──► HA IMAP Integration ──imap_content event──► Print Bridge
                                                                               │
                           1. Check: is sender in allowed_senders?             │
                           2. Check: is folder in folder_filter?               │
                           3. For each PDF part → imap.fetch_part ◄────────────┘
                           4. Booklet? → reorder pages
                           5. Build IPP/2.0 packet → POST to CUPS
-                          6. Fire auto_print_job_completed → Logbook
+                          6. Fire print_bridge_job_completed → Logbook
 ```
 
 ---
@@ -225,7 +225,7 @@ booklet for some subjects, multiple printers), use the included automation bluep
 **Settings → Automations → Blueprints → Import Blueprint** — paste:
 
 ```
-https://github.com/rubeecube/custom_component_hassio_print/blob/main/blueprints/automation/auto_print/print_from_email.yaml
+https://github.com/rubeecube/ha-print-bridge/blob/main/blueprints/automation/print_bridge/print_from_email.yaml
 ```
 
 ### Inputs
@@ -263,7 +263,7 @@ imap_content event received
                             = one-sided             if subject has one-sided keyword
                             = two-sided-long-edge   if subject has two-sided keyword
                             = default_duplex        otherwise
-                 ──► auto_print.process_imap_part(duplex, booklet)
+                 ──► print_bridge.process_imap_part(duplex, booklet)
                  ──► imap.seen  (if mark_as_seen)
 ```
 
@@ -283,7 +283,7 @@ imap_content event received
 
 ## Lovelace Audit Dashboard
 
-A ready-made dashboard view is included at [`lovelace/auto_print_audit.yaml`](lovelace/auto_print_audit.yaml).
+A ready-made dashboard view is included at [`lovelace/print_bridge_audit.yaml`](lovelace/print_bridge_audit.yaml).
 
 Add it as a new view to any dashboard (**Edit → Add View → Manual Configuration (YAML)**).
 Replace `PRINTER_NAME` with the slug for your printer queue name.
@@ -302,8 +302,8 @@ The view includes:
 ## Developer Setup
 
 ```bash
-git clone https://github.com/rubeecube/custom_component_hassio_print
-cd custom_component_hassio_print
+git clone https://github.com/rubeecube/ha-print-bridge
+cd ha-print-bridge
 chmod +x setup-dev.sh && ./setup-dev.sh
 ```
 
@@ -323,8 +323,8 @@ HA_TOKEN=<token> ./validate.sh
 
 ## FAQ
 
-**Q: Do I need to configure IMAP credentials in Auto Print?**  
-A: No. Credentials live in HA's IMAP integration only. Auto Print subscribes to the events it fires.
+**Q: Do I need to configure IMAP credentials in Print Bridge?**  
+A: No. Credentials live in HA's IMAP integration only. Print Bridge subscribes to the events it fires.
 
 **Q: Can I print from multiple email addresses?**  
 A: Yes — add one address per line in **Allowed Senders**, or leave it empty to accept all.
@@ -333,10 +333,10 @@ A: Yes — add one address per line in **Allowed Senders**, or leave it empty to
 A: Yes — add one folder name per line in **IMAP Folder Filter** (e.g. `INBOX/Print`). The hint in the Options form shows the exact folder names your IMAP integration monitors. Leave empty to accept all folders.
 
 **Q: How do I check which emails would be printed right now?**  
-A: Press the **Check Filter** button (or call `auto_print.check_filter`). Results appear in the `sensor.auto_print_*_filter_preview` entity and in the Lovelace audit view.
+A: Press the **Check Filter** button (or call `print_bridge.check_filter`). Results appear in the `sensor.print_bridge_*_filter_preview` entity and in the Lovelace audit view.
 
 **Q: What if my PDF is very large?**  
-A: Auto Print calls `imap.fetch_part` which has no size limit (unlike the 32 KB event body limit).
+A: Print Bridge calls `imap.fetch_part` which has no size limit (unlike the 32 KB event body limit).
 
 **Q: How do I enable booklet printing?**  
 A: Add a substring of the PDF filename to **Booklet Patterns** in the options (e.g. `Programme`). Any attachment whose filename contains that string is automatically reordered for saddle-stitch printing.

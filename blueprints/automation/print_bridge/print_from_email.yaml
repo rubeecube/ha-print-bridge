@@ -1,5 +1,5 @@
 blueprint:
-  name: "Auto Print — Email to Printer"
+  name: "Print Bridge — Email to Printer"
   description: >
     Print PDF email attachments with configurable sender filters, subject
     keyword rules, and per-condition duplex / booklet settings.
@@ -10,20 +10,20 @@ blueprint:
     - The HA built-in **IMAP** integration configured and pointing at your
       print mailbox.
 
-    - The **Auto Print** custom integration installed and set up with your
+    - The **Print Bridge** custom integration installed and set up with your
       CUPS server.
 
 
     **How it works:**
 
     Triggers on every `imap_content` event from the selected IMAP account.
-    Filters by sender and subject, then calls `auto_print.process_imap_part`
+    Filters by sender and subject, then calls `print_bridge.process_imap_part`
     for each PDF attachment with the computed duplex/booklet settings.
     Optionally marks the email as seen.
 
   domain: automation
   author: rubeecube
-  source_url: https://github.com/rubeecube/custom_component_hassio_print/blob/main/blueprints/automation/auto_print/print_from_email.yaml
+  source_url: https://github.com/rubeecube/ha-print-bridge/blob/main/blueprints/automation/auto_print/print_from_email.yaml
 
   input:
 
@@ -259,7 +259,7 @@ action:
         - condition: template
           value_template: "{{ repeat.item[1].content_type == 'application/pdf' }}"
 
-        - action: auto_print.process_imap_part
+        - action: print_bridge.process_imap_part
           data:
             entry_id: "{{ trigger.event.data.entry_id }}"
             uid: "{{ _uid }}"

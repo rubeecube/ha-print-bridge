@@ -27,7 +27,7 @@ from pypdf import PdfReader, PdfWriter
 from conftest import ROOT, make_pdf
 
 # ── explicit importlib loads to avoid name shadowing with custom-component ────
-# Both home-assistant/ and custom_components/auto_print/ have booklet_maker.py.
+# Both home-assistant/ and custom_components/print_bridge/ have booklet_maker.py.
 # We load the HA version by its absolute path to guarantee the right module.
 
 def _load_module(name: str, rel_path: str):

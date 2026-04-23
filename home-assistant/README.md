@@ -1,7 +1,7 @@
 # Legacy Shell-Command Approach
 
 > **This directory contains the original shell-command + Python script pipeline.**
-> For new installations, use the **[Auto Print custom component](../README.md)** instead —
+> For new installations, use the **[Print Bridge custom component](../README.md)** instead —
 > it is self-contained, configurable from the HA UI, and requires no manual file deployment.
 
 ---

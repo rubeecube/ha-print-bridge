@@ -1,0 +1,12 @@
+{
+  "domain": "print_bridge",
+  "name": "Print Bridge",
+  "version": "2.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/rubeecube/ha-print-bridge",
+  "issue_tracker": "https://github.com/rubeecube/ha-print-bridge/issues",
+  "requirements": ["pypdf>=4.0.0"],
+  "after_dependencies": ["imap"],
+  "codeowners": ["@rubeecube"],
+  "iot_class": "local_push"
+}

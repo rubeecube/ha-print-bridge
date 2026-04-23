@@ -1,11 +1,11 @@
-"""DataUpdateCoordinator for the Auto Print integration.
+"""DataUpdateCoordinator for the Print Bridge integration.
 
 Responsibilities:
   - Listen for imap_content events fired by HA's built-in IMAP integration.
   - For each PDF attachment, call imap.fetch_part to retrieve the bytes.
   - Optionally reorder pages for booklet printing.
   - Send the print job to CUPS via a raw IPP/2.0 request (aiohttp).
-  - Fire auto_print_job_completed events → HA Logbook audit trail.
+  - Fire print_bridge_job_completed events → HA Logbook audit trail.
   - Periodically check printer reachability and count queued files.
 """
 
@@ -329,7 +329,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     await self.hass.services.async_call(
                         "persistent_notification", "create",
                         {
-                            "title": "Auto Print — Job queued",
+                            "title": "Print Bridge — Job queued",
                             "message": (
                                 f"**{filename}** from {sender or 'unknown'} was received "
                                 f"outside the print schedule ({self._schedule_start}–"
@@ -372,7 +372,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         """Fetch one attachment via imap.fetch_part and print it.
 
         IMAP identifiers are always stored in the result so the job can be
-        retried later via async_retry_job / auto_print.retry_job.
+        retried later via async_retry_job / print_bridge.retry_job.
         """
         try:
             response: dict[str, Any] = await self.hass.services.async_call(
@@ -524,7 +524,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return
 
         if result.success:
-            title = f"Auto Print — Printed successfully"
+            title = f"Print Bridge — Printed successfully"
             message = f"**{result.filename}**"
             if result.sender:
                 message += f"\nFrom: {result.sender}"
@@ -533,13 +533,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             if result.booklet:
                 message += "\nBooklet mode"
         else:
-            title = "Auto Print — Print failed"
+            title = "Print Bridge — Print failed"
             message = f"**{result.filename}** could not be printed."
             if result.error:
                 message += f"\nError: {result.error}"
             if result.sender:
                 message += f"\nFrom: {result.sender}"
-            message += "\n\nCheck the HA logs or the Auto Print sensor for details."
+            message += "\n\nCheck the HA logs or the Print Bridge sensor for details."
 
         try:
             await self.hass.services.async_call(

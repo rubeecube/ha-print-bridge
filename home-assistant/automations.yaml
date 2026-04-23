@@ -1,4 +1,4 @@
-# Home Assistant automations for the auto-print pipeline.
+# Home Assistant automations for the print-bridge pipeline.
 #
 # Include from configuration.yaml:
 #   automation: !include home-assistant/automations.yaml

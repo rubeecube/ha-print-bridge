@@ -1,4 +1,4 @@
-"""Binary sensor entities for the Auto Print integration."""
+"""Binary sensor entities for the Print Bridge integration."""
 
 from __future__ import annotations
 

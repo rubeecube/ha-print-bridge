@@ -1,4 +1,4 @@
-"""Entity state tests for the Auto Print integration.
+"""Entity state tests for the Print Bridge integration.
 
 Golden rules applied:
   - Sensor states reflect coordinator data.
@@ -20,14 +20,14 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.auto_print.const import (
+from custom_components.print_bridge.const import (
     BINARY_SENSOR_PRINTER_ONLINE,
     BUTTON_TEST_PAGE,
     DOMAIN,
     SENSOR_LAST_JOB,
     SENSOR_QUEUE_DEPTH,
 )
-from custom_components.auto_print.coordinator import AutoPrintData, PrintJobResult
+from custom_components.print_bridge.coordinator import AutoPrintData, PrintJobResult
 
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
 
@@ -38,7 +38,7 @@ from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
 
 async def _setup(hass: HomeAssistant, data: AutoPrintData) -> MockConfigEntry:
     with patch(
-        "custom_components.auto_print.coordinator.AutoPrintCoordinator._async_update_data",
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator._async_update_data",
         return_value=data,
     ):
         entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
@@ -120,7 +120,7 @@ async def test_button_press_success(hass: HomeAssistant) -> None:
     success = PrintJobResult(filename="auto_print_test_page.pdf", success=True)
 
     with patch(
-        "custom_components.auto_print.coordinator.AutoPrintCoordinator.async_send_print_job",
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator.async_send_print_job",
         return_value=success,
     ):
         await hass.services.async_call("button", "press", {"entity_id": btn}, blocking=True)
@@ -133,7 +133,7 @@ async def test_button_press_failure_raises(hass: HomeAssistant) -> None:
 
     with (
         patch(
-            "custom_components.auto_print.coordinator.AutoPrintCoordinator.async_send_print_job",
+            "custom_components.print_bridge.coordinator.AutoPrintCoordinator.async_send_print_job",
             return_value=failure,
         ),
         pytest.raises(HomeAssistantError),

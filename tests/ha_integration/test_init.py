@@ -16,7 +16,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.auto_print.const import DOMAIN, SERVICE_CLEAR_QUEUE, SERVICE_PRINT_FILE
+from custom_components.print_bridge.const import DOMAIN, SERVICE_CLEAR_QUEUE, SERVICE_PRINT_FILE
 
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
 

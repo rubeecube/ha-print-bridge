@@ -1,4 +1,4 @@
-"""Coordinator event-handling tests for the Auto Print integration.
+"""Coordinator event-handling tests for the Print Bridge integration.
 
 Covers:
   - imap_content event with a PDF part triggers _async_fetch_and_print.
@@ -19,8 +19,8 @@ import pytest
 from homeassistant.core import Event, HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.auto_print.const import DOMAIN
-from custom_components.auto_print.coordinator import (
+from custom_components.print_bridge.const import DOMAIN
+from custom_components.print_bridge.coordinator import (
     AutoPrintCoordinator,
     AutoPrintData,
     PrintJobResult,
@@ -39,7 +39,7 @@ async def _setup_coordinator(
     hass: HomeAssistant, options: dict | None = None
 ) -> tuple[MockConfigEntry, AutoPrintCoordinator]:
     with patch(
-        "custom_components.auto_print.coordinator.AutoPrintCoordinator._async_update_data",
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator._async_update_data",
         return_value=AutoPrintData(queue_depth=0, printer_online=True),
     ):
         entry = MockConfigEntry(
@@ -217,7 +217,7 @@ async def test_booklet_pattern_sets_booklet_flag(hass: HomeAssistant) -> None:
         ) else None
 
         # Direct: verify is_booklet_job returns True for this filename
-        from custom_components.auto_print.print_handler import is_booklet_job
+        from custom_components.print_bridge.print_handler import is_booklet_job
         assert is_booklet_job("Sunday Programme.pdf", ["Programme"]) is True
 
 
@@ -238,7 +238,7 @@ async def test_send_print_job_posts_to_ipp_endpoint(hass: HomeAssistant) -> None
     mock_session.post.return_value = mock_resp
 
     with patch(
-        "custom_components.auto_print.coordinator.async_get_clientsession",
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
         return_value=mock_session,
     ):
         result = await coordinator.async_send_print_job(

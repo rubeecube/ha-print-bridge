@@ -1,4 +1,4 @@
-"""Saddle-stitch booklet imposition for the Auto Print integration.
+"""Saddle-stitch booklet imposition for the Print Bridge integration.
 
 All functions are pure (bytes in → bytes out) with no I/O or HA dependencies.
 """

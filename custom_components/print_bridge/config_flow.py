@@ -1,4 +1,4 @@
-"""Config flow and options flow for the Auto Print integration.
+"""Config flow and options flow for the Print Bridge integration.
 
 On first launch the flow auto-discovers CUPS at common addresses and reads any
 IMAP integration entries already configured in HA, so that the user can confirm
@@ -318,7 +318,7 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         return self.async_create_entry(
-            title=f"Auto Print (direct) — {display_name}",
+            title=f"Print Bridge (direct) — {display_name}",
             data={CONF_DIRECT_PRINTER_URL: direct_url},
             options=initial_options,
         )
@@ -336,7 +336,7 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         return self.async_create_entry(
-            title=f"Auto Print — {printer_name}",
+            title=f"Print Bridge — {printer_name}",
             data={CONF_CUPS_URL: cups_url, CONF_PRINTER_NAME: printer_name},
             options=initial_options,
         )

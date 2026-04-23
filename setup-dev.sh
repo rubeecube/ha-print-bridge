@@ -15,7 +15,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
 
-echo "=== Auto Print dev setup ==="
+echo "=== Print Bridge dev setup ==="
 
 # ── 1. Activate hooks ─────────────────────────────────────────────────────────
 echo "→ Setting core.hooksPath = .githooks"

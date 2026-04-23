@@ -39,7 +39,7 @@
     },
     "step": {
       "init": {
-        "title": "Auto Print Options",
+        "title": "Print Bridge Options",
         "description": "Your IMAP integrations monitor: {imap_folders}",
         "data": {
           "allowed_senders": "Allowed Senders (one per line)",

@@ -1,4 +1,4 @@
-"""Config flow tests for the Auto Print integration.
+"""Config flow tests for the Print Bridge integration.
 
 Golden rules applied:
   - Happy path with no discovery: manual form → entry created.
@@ -20,7 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.auto_print.const import CONF_ALLOWED_SENDERS, DOMAIN
+from custom_components.print_bridge.const import CONF_ALLOWED_SENDERS, DOMAIN
 
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_cups_session
 
@@ -42,7 +42,7 @@ _MANUAL = "__manual__"
 def _mock_no_discovery():
     """Patch _discover_cups to simulate no CUPS found."""
     return patch(
-        "custom_components.auto_print.config_flow._discover_cups",
+        "custom_components.print_bridge.config_flow._discover_cups",
         new=AsyncMock(return_value=(None, [])),
     )
 
@@ -50,7 +50,7 @@ def _mock_no_discovery():
 def _mock_discovery(url: str = "http://localhost:631", printers: list = None):
     """Patch _discover_cups to return *url* and *printers*."""
     return patch(
-        "custom_components.auto_print.config_flow._discover_cups",
+        "custom_components.print_bridge.config_flow._discover_cups",
         new=AsyncMock(return_value=(url, printers or ["LocalPrinter"])),
     )
 
@@ -227,7 +227,7 @@ async def test_cups_unreachable_shows_error_then_recovers(
 
     # First attempt: CUPS is down.
     with patch(
-        "custom_components.auto_print.config_flow.async_get_clientsession",
+        "custom_components.print_bridge.config_flow.async_get_clientsession",
         side_effect=_aiohttp.ClientError("refused"),
     ):
         result = await hass.config_entries.flow.async_configure(
@@ -239,7 +239,7 @@ async def test_cups_unreachable_shows_error_then_recovers(
     # Recovery: CUPS is back.
     from .conftest import _make_cups_session
     with patch(
-        "custom_components.auto_print.config_flow.async_get_clientsession",
+        "custom_components.print_bridge.config_flow.async_get_clientsession",
         return_value=_make_cups_session(200),
     ):
         result = await hass.config_entries.flow.async_configure(

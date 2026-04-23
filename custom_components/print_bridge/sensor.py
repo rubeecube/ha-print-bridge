@@ -1,4 +1,4 @@
-"""Sensor entities for the Auto Print integration."""
+"""Sensor entities for the Print Bridge integration."""
 
 from __future__ import annotations
 
@@ -48,8 +48,8 @@ async def async_setup_entry(
 def _device_info(entry: ConfigEntry) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
-        name=f"Auto Print — {entry.data[CONF_PRINTER_NAME]}",
-        manufacturer="Auto Print",
+        name=f"Print Bridge — {entry.data[CONF_PRINTER_NAME]}",
+        manufacturer="Print Bridge",
         model="Email → IPP Bridge",
         entry_type=DeviceEntryType.SERVICE,
     )

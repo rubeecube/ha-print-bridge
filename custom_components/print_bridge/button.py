@@ -1,4 +1,4 @@
-"""Button entities for the Auto Print integration."""
+"""Button entities for the Print Bridge integration."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _TEST_PAGE_CONTENT = b"""\
 4 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj
 5 0 obj<</Length 44>>
 stream
-BT /F1 24 Tf 200 400 Td (Auto Print test) Tj ET
+BT /F1 24 Tf 200 400 Td (Print Bridge test) Tj ET
 endstream
 endobj
 xref

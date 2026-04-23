@@ -1,4 +1,4 @@
-"""Auto Print integration setup.
+"""Print Bridge integration setup.
 
 Architecture: this component subscribes to imap_content events fired by HA's
 built-in IMAP integration.  When a PDF attachment is detected it calls
@@ -60,7 +60,7 @@ AutoPrintConfigEntry: TypeAlias = ConfigEntry[AutoPrintCoordinator]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -> bool:
-    """Set up Auto Print from a config entry."""
+    """Set up Print Bridge from a config entry."""
     coordinator = AutoPrintCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
@@ -244,8 +244,8 @@ def _register_services(hass: HomeAssistant) -> None:
 
 
 def _get_any_coordinator(hass: HomeAssistant) -> AutoPrintCoordinator:
-    """Return the coordinator for the first loaded Auto Print entry."""
+    """Return the coordinator for the first loaded Print Bridge entry."""
     for entry in hass.config_entries.async_entries(DOMAIN):
         if entry.state is ConfigEntryState.LOADED and entry.runtime_data is not None:
             return entry.runtime_data  # type: ignore[return-value]
-    raise HomeAssistantError("Auto Print is not configured or not yet loaded")
+    raise HomeAssistantError("Print Bridge is not configured or not yet loaded")

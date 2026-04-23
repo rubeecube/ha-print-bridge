@@ -1,4 +1,4 @@
-# Auto Print — Audit Dashboard View
+# Print Bridge — Audit Dashboard View
 #
 # How to add this view to your Home Assistant dashboard:
 #
@@ -9,17 +9,17 @@
 #
 # Replace PRINTER_NAME with the CUPS queue name used during setup
 # (e.g. Canon_MG3600_series).  Entity IDs follow the pattern:
-#   sensor.auto_print_{slug}_job_log
-#   sensor.auto_print_{slug}_last_print_job
-#   binary_sensor.auto_print_{slug}_printer_online
+#   sensor.print_bridge_{slug}_job_log
+#   sensor.print_bridge_{slug}_last_print_job
+#   binary_sensor.print_bridge_{slug}_printer_online
 #
 # The entity slugs are derived from the printer name — open Developer Tools →
-# States and search "auto_print" to find the exact IDs for your setup.
+# States and search "print_bridge" to find the exact IDs for your setup.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
 title: Print Audit
-path: auto-print-audit
+path: print-bridge-audit
 icon: mdi:printer-eye
 
 cards:
@@ -28,29 +28,29 @@ cards:
   - type: horizontal-stack
     cards:
       - type: entity
-        entity: binary_sensor.auto_print_PRINTER_NAME_printer_online
+        entity: binary_sensor.print_bridge_PRINTER_NAME_printer_online
         name: Printer Online
         icon: mdi:printer-check
         state_color: true
 
       - type: entity
-        entity: sensor.auto_print_PRINTER_NAME_print_queue_depth
+        entity: sensor.print_bridge_PRINTER_NAME_print_queue_depth
         name: Queue Depth
         icon: mdi:file-multiple
 
       - type: entity
-        entity: sensor.auto_print_PRINTER_NAME_scheduled_queue
+        entity: sensor.print_bridge_PRINTER_NAME_scheduled_queue
         name: Scheduled Queue
         icon: mdi:clock-outline
         state_color: true
 
       - type: entity
-        entity: sensor.auto_print_PRINTER_NAME_job_log
+        entity: sensor.print_bridge_PRINTER_NAME_job_log
         name: Jobs Sent
         icon: mdi:counter
 
       - type: entity
-        entity: sensor.auto_print_PRINTER_NAME_last_print_job
+        entity: sensor.print_bridge_PRINTER_NAME_last_print_job
         name: Last Job
         icon: mdi:file-check
 
@@ -59,14 +59,14 @@ cards:
     title: Print Event Log
     hours_to_show: 168    # 7 days
     entities:
-      - sensor.auto_print_PRINTER_NAME_job_log
-      - sensor.auto_print_PRINTER_NAME_last_print_job
+      - sensor.print_bridge_PRINTER_NAME_job_log
+      - sensor.print_bridge_PRINTER_NAME_last_print_job
 
   # ── Recent jobs table (Markdown) ───────────────────────────────────────────
   - type: markdown
     title: Recent Print Jobs (last 50)
     content: |
-      {% set jobs = state_attr('sensor.auto_print_PRINTER_NAME_job_log', 'jobs') %}
+      {% set jobs = state_attr('sensor.print_bridge_PRINTER_NAME_job_log', 'jobs') %}
       {% if jobs is none or jobs | count == 0 %}
       *No print jobs recorded yet.*
       {% else %}
@@ -76,14 +76,14 @@ cards:
       | {{ j.index }} | {{ j.timestamp | as_datetime | as_local | strftime('%d/%m %H:%M') }} | `{{ j.filename }}` | {{ '✅' if j.success else '❌' }} | {{ j.sender or '—' }} | {{ j.duplex or '—' }} | {{ '🔄' if j.can_retry else '—' }} |
       {% endfor %}
 
-      *🔄 = retryable — use index with `auto_print.retry_job`*
+      *🔄 = retryable — use index with `print_bridge.retry_job`*
       {% endif %}
 
   # ── Statistics graph ───────────────────────────────────────────────────────
   - type: statistics-graph
     title: Print Activity
     entities:
-      - entity: sensor.auto_print_PRINTER_NAME_job_log
+      - entity: sensor.print_bridge_PRINTER_NAME_job_log
         name: Jobs Sent
     period:
       calendar:
@@ -94,21 +94,21 @@ cards:
 
   # ── Filter preview ─────────────────────────────────────────────────────────
   - type: entity
-    entity: sensor.auto_print_PRINTER_NAME_filter_preview
+    entity: sensor.print_bridge_PRINTER_NAME_filter_preview
     name: Matching Emails (last check)
     icon: mdi:email-search
 
   - type: markdown
     title: Filter Preview — Matching Emails
     content: |
-      {% set preview = state_attr('sensor.auto_print_PRINTER_NAME_filter_preview', 'emails') %}
-      {% set checked = state_attr('sensor.auto_print_PRINTER_NAME_filter_preview', 'checked_at') %}
+      {% set preview = state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'emails') %}
+      {% set checked = state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'checked_at') %}
       {% if preview is none or preview | count == 0 %}
       *No check run yet. Press **Check Filter** to scan the mailbox.*
       {% else %}
-      **Last checked:** {{ checked }}  ·  **Account:** {{ state_attr('sensor.auto_print_PRINTER_NAME_filter_preview', 'imap_account') }}
+      **Last checked:** {{ checked }}  ·  **Account:** {{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'imap_account') }}
 
-      **{{ state_attr('sensor.auto_print_PRINTER_NAME_filter_preview', 'total_found') }}** emails scanned  ·  **{{ state_attr('sensor.auto_print_PRINTER_NAME_filter_preview', 'matching_filter') }}** match filter  ·  **{{ state_attr('sensor.auto_print_PRINTER_NAME_filter_preview', 'with_pdf') }}** have a PDF
+      **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'total_found') }}** emails scanned  ·  **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'matching_filter') }}** match filter  ·  **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'with_pdf') }}** have a PDF
 
       | Date | Subject | From | Folder | Match | PDF |
       |------|---------|------|--------|:-----:|:---:|
@@ -121,16 +121,16 @@ cards:
   - type: entities
     title: Actions
     entities:
-      - entity: button.auto_print_PRINTER_NAME_print_queued_jobs_now
+      - entity: button.print_bridge_PRINTER_NAME_print_queued_jobs_now
         name: Print Queued Jobs Now (bypass schedule)
 
-      - entity: button.auto_print_PRINTER_NAME_retry_last_failed_job
+      - entity: button.print_bridge_PRINTER_NAME_retry_last_failed_job
         name: Retry Last Failed Job
 
-      - entity: button.auto_print_PRINTER_NAME_check_filter
+      - entity: button.print_bridge_PRINTER_NAME_check_filter
         name: Check Filter (scan mailbox)
 
-      - entity: button.auto_print_PRINTER_NAME_print_test_page
+      - entity: button.print_bridge_PRINTER_NAME_print_test_page
         name: Print Test Page
 
       - type: button
@@ -139,4 +139,4 @@ cards:
         action_name: Clear
         tap_action:
           action: call-service
-          service: auto_print.clear_queue
+          service: print_bridge.clear_queue

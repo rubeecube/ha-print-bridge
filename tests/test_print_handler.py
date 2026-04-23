@@ -1,4 +1,4 @@
-"""Tests for custom_components/auto_print/print_handler.py.
+"""Tests for custom_components/print_bridge/print_handler.py.
 
 Covers:
   - IPP 2.0 packet structure (header bytes, attribute encoding).

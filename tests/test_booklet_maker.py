@@ -1,4 +1,4 @@
-"""Tests for custom_components/auto_print/booklet_maker.py.
+"""Tests for custom_components/print_bridge/booklet_maker.py.
 
 Covers:
   - Correct page count after booklet conversion (no double-adding of blank pages).

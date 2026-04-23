@@ -16,7 +16,7 @@ from homeassistant.core import HomeAssistant
 # ── path setup ────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).parent.parent.parent
 
-# Workspace root must be on sys.path so `custom_components.auto_print` imports work.
+# Workspace root must be on sys.path so `custom_components.print_bridge` imports work.
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -56,10 +56,10 @@ MOCK_OPTIONS: dict = {
 @pytest.fixture
 def mock_coordinator_update():
     """Patch AutoPrintCoordinator._async_update_data to avoid real HTTP calls."""
-    from custom_components.auto_print.coordinator import AutoPrintData
+    from custom_components.print_bridge.coordinator import AutoPrintData
 
     with patch(
-        "custom_components.auto_print.coordinator.AutoPrintCoordinator._async_update_data",
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator._async_update_data",
         return_value=AutoPrintData(queue_depth=0, printer_online=True),
     ) as patched:
         yield patched
@@ -86,11 +86,11 @@ def mock_cups_ok():
     """Mock reachable CUPS; patch both _discover_cups and async_get_clientsession."""
     with (
         patch(
-            "custom_components.auto_print.config_flow._discover_cups",
+            "custom_components.print_bridge.config_flow._discover_cups",
             new=AsyncMock(return_value=(None, [])),
         ),
         patch(
-            "custom_components.auto_print.config_flow.async_get_clientsession",
+            "custom_components.print_bridge.config_flow.async_get_clientsession",
             return_value=_make_cups_session(200),
         ),
     ):
@@ -102,11 +102,11 @@ def mock_cups_unreachable():
     import aiohttp
     with (
         patch(
-            "custom_components.auto_print.config_flow._discover_cups",
+            "custom_components.print_bridge.config_flow._discover_cups",
             new=AsyncMock(return_value=(None, [])),
         ),
         patch(
-            "custom_components.auto_print.config_flow.async_get_clientsession",
+            "custom_components.print_bridge.config_flow.async_get_clientsession",
             side_effect=aiohttp.ClientError("refused"),
         ),
     ):
@@ -118,7 +118,7 @@ def mock_cups_unreachable():
 @pytest.fixture
 def mock_setup_entry():
     with patch(
-        "custom_components.auto_print.async_setup_entry",
+        "custom_components.print_bridge.async_setup_entry",
         return_value=True,
     ) as mock_fn:
         yield mock_fn

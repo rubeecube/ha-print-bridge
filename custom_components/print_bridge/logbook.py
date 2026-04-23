@@ -1,12 +1,12 @@
-"""Logbook integration for Auto Print.
+"""Logbook integration for Print Bridge.
 
-Registers a human-readable descriptor for auto_print_job_completed events
+Registers a human-readable descriptor for print_bridge_job_completed events
 so that every print job appears in the HA Logbook as a legible sentence
 rather than a raw event payload.
 
 Example Logbook entries:
-  Auto Print | Printed 'invoice.pdf' · two-sided · from billing@example.com · Canon_MG3600_series
-  Auto Print | Print failed for 'bad.pdf': HTTP 503 · from sender@example.com
+  Print Bridge | Printed 'invoice.pdf' · two-sided · from billing@example.com · Canon_MG3600_series
+  Print Bridge | Print failed for 'bad.pdf': HTTP 503 · from sender@example.com
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ def async_describe_events(
     hass: HomeAssistant,
     async_describe_event: ...,
 ) -> None:
-    """Register descriptors for Auto Print events in the HA Logbook."""
+    """Register descriptors for Print Bridge events in the HA Logbook."""
 
     @callback
     def _describe_job_completed(event) -> dict[str, str]:
@@ -49,7 +49,7 @@ def async_describe_events(
             parts.append(printer)
 
         return {
-            "name": "Auto Print",
+            "name": "Print Bridge",
             "message": "  ·  ".join(parts),
         }
 

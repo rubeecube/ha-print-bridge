@@ -7,7 +7,7 @@ build-backend = "setuptools.backends.legacy:build"
 # ---------------------------------------------------------------------------
 
 [project]
-name = "auto-print"
+name = "print-bridge"
 version = "2.0.0"
 description = "Home Assistant custom component — print PDF email attachments via IMAP + IPP/CUPS"
 readme = "README.md"
@@ -29,10 +29,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage      = "https://github.com/rubeecube/custom_component_hassio_print"
-Repository    = "https://github.com/rubeecube/custom_component_hassio_print"
-"Bug Tracker" = "https://github.com/rubeecube/custom_component_hassio_print/issues"
-Changelog     = "https://github.com/rubeecube/custom_component_hassio_print/releases"
+Homepage      = "https://github.com/rubeecube/ha-print-bridge"
+Repository    = "https://github.com/rubeecube/ha-print-bridge"
+"Bug Tracker" = "https://github.com/rubeecube/ha-print-bridge/issues"
+Changelog     = "https://github.com/rubeecube/ha-print-bridge/releases"
 
 # ---------------------------------------------------------------------------
 # Optional: dev / test extras

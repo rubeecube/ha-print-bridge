@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# validate.sh — end-to-end Auto Print validation script
+# validate.sh — end-to-end Print Bridge validation script
 #
 # Prerequisites (must be already running):
 #   docker compose up -d
@@ -108,7 +108,7 @@ pdf_bytes = buf.getvalue()
 msg = MIMEMultipart()
 msg["From"] = "test@test.example.com"
 msg["To"]   = "test@test.example.com"
-msg["Subject"] = "Auto Print validation job"
+msg["Subject"] = "Print Bridge validation job"
 msg.attach(MIMEText("Please print the attached file.", "plain"))
 
 part = MIMEApplication(pdf_bytes, _subtype="pdf", Name="validation_test.pdf")
@@ -126,7 +126,7 @@ pass "Test email sent."
 # ---------------------------------------------------------------------------
 # 3. Poll HA REST API for sensor.auto_print_last_job = "success"
 # ---------------------------------------------------------------------------
-info "Waiting up to ${TIMEOUT_SECONDS}s for Auto Print to process the job..."
+info "Waiting up to ${TIMEOUT_SECONDS}s for Print Bridge to process the job..."
 
 ENTITY="sensor.auto_print_last_job"
 ELAPSED=0
@@ -186,4 +186,4 @@ echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}  All validation checks passed!${NC}"
 echo -e "${GREEN}========================================${NC}"
-echo "  Email injected → HA IMAP → auto_print → CUPS → cups-pdf"
+echo "  Email injected → HA IMAP → print_bridge → CUPS → cups-pdf"

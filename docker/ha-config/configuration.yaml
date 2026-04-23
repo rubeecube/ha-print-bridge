@@ -1,4 +1,4 @@
-# Minimal HA configuration for the Auto Print validation stack.
+# Minimal HA configuration for the Print Bridge validation stack.
 #
 # After starting the stack with docker compose up -d --build:
 #
@@ -13,15 +13,15 @@
 #      Password: test
 #    Advanced mode → disable IMAP-Push (GreenMail does not support IDLE).
 #
-# 3. Add the Auto Print integration:
-#    Settings → Integrations → Add → Auto Print
+# 3. Add the Print Bridge integration:
+#    Settings → Integrations → Add → Print Bridge
 #    The setup wizard auto-discovers CUPS at localhost:631 and shows the
 #    GreenMail account as an IMAP pre-fill option.
 #      CUPS URL:      http://localhost:631
 #      Printer Name:  TestPrinter   (or select from the dropdown)
 #      IMAP Account:  test@test.example.com  (pre-fills Allowed Senders)
 #
-# 4. Open Auto Print → Configure (options) and verify / update:
+# 4. Open Print Bridge → Configure (options) and verify / update:
 #      Allowed Senders:    test@test.example.com
 #      IMAP Folder Filter: INBOX          (leave empty to accept all folders)
 #      Default Duplex:     Two-sided portrait
@@ -34,12 +34,12 @@
 #    HA_TOKEN=<your-token> ./validate.sh
 
 homeassistant:
-  name: Auto Print Validation
+  name: Print Bridge Validation
   unit_system: metric
   time_zone: Europe/Paris
 
 logger:
   default: warning
   logs:
-    custom_components.auto_print: debug
+    custom_components.print_bridge: debug
     homeassistant.components.imap: info

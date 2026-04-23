@@ -1,4 +1,4 @@
-"""Shared pytest fixtures and sys.path wiring for auto-print tests."""
+"""Shared pytest fixtures and sys.path wiring for print-bridge tests."""
 
 import io
 import sys
@@ -9,10 +9,10 @@ from pypdf import PdfReader, PdfWriter
 
 # ── path setup ───────────────────────────────────────────────────────────────
 ROOT = Path(__file__).parent.parent
-# Add the auto_print package directory first so its pure modules are found
+# Add the print_bridge package directory first so its pure modules are found
 # ahead of home-assistant/ when module names collide (e.g. booklet_maker).
 sys.path.insert(0, str(ROOT / "home-assistant"))
-sys.path.insert(0, str(ROOT / "custom_components" / "auto_print"))
+sys.path.insert(0, str(ROOT / "custom_components" / "print_bridge"))
 
 
 # ── shared helpers ────────────────────────────────────────────────────────────
