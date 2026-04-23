@@ -41,11 +41,30 @@ blueprint:
 
     # ── Sender filter ─────────────────────────────────────────────────────
 
-    allowed_senders:
-      name: Allowed Senders
+    print_bridge_sensor:
+      name: "Print Bridge — Filter Preview Sensor (optional)"
       description: >
-        Comma-separated list of email addresses allowed to trigger printing.
-        Leave empty to accept mail from **any** sender.
+        Select your Print Bridge **Filter Preview** sensor
+        (`sensor.print_bridge_*_filter_preview`).
+
+        When selected, the blueprint automatically uses up to **5 unique
+        senders** found in the last mailbox scan — no manual typing needed.
+
+        **To refresh:** press the **Check Filter** button on the Print Bridge
+        device page before saving this automation.
+
+        "Allowed Senders" below takes priority if both are filled in.
+      selector:
+        entity:
+          integration: print_bridge
+          domain: sensor
+
+    allowed_senders:
+      name: Allowed Senders (manual override)
+      description: >
+        Comma-separated email addresses allowed to trigger printing.
+        Leave empty to use the senders from the Filter Preview Sensor above.
+        Leave both empty to accept mail from **any** sender.
 
         Example: `print@example.com, admin@example.com`
       default: ""
@@ -173,6 +192,7 @@ trigger:
 
 variables:
   imap_entry_id: !input imap_entry_id
+  print_bridge_sensor: !input print_bridge_sensor
   allowed_senders_raw: !input allowed_senders
   folder_filter_raw: !input folder_filter
   subject_filter_raw: !input subject_filter
@@ -187,9 +207,28 @@ variables:
   _folder_list: >
     {{ folder_filter_raw | string | split(',')
        | map('trim') | reject('eq', '') | list }}
+
+  # Sender list: manual input takes priority; fall back to up to 5 unique
+  # senders from the last Print Bridge filter scan (bare email addresses).
+  _sensor_senders: >
+    {% if print_bridge_sensor is defined and print_bridge_sensor != ''
+         and states(print_bridge_sensor) not in ['unknown', 'unavailable'] %}
+      {% set emails = state_attr(print_bridge_sensor, 'emails') | default([]) %}
+      {% set senders = emails | selectattr('has_pdf') | selectattr('matches_filter')
+                       | map(attribute='sender') | unique | list %}
+      {{ senders[:5] }}
+    {% else %}
+      {{ [] }}
+    {% endif %}
+
   _sender_list: >
-    {{ allowed_senders_raw | string | lower | split(',')
-       | map('trim') | reject('eq', '') | list }}
+    {% set manual = allowed_senders_raw | string | lower | split(',')
+                    | map('trim') | reject('eq', '') | list %}
+    {% if manual | count > 0 %}
+      {{ manual }}
+    {% else %}
+      {{ _sensor_senders }}
+    {% endif %}
   _one_sided_fname_list: >
     {{ one_sided_kw_raw | string | lower | split(',')
        | map('trim') | reject('eq', '') | list }}

@@ -168,7 +168,7 @@ def _build_preview(
         return EmailPreview(
             uid=uid,
             subject=subject,
-            sender=sender_hdr,
+            sender=sender_email,      # bare address for filter matching
             date=date_hdr,
             folder=folder,
             has_pdf=has_pdf,
