@@ -16,7 +16,7 @@
           "cups_url": "URL of your CUPS server (e.g. http://192.168.1.x:631). Shown because CUPS was detected on this host.",
           "printer_name": "CUPS printer queue name as registered in CUPS.",
           "imap_account": "Select an IMAP account to automatically add its address to Allowed Senders. You can change this later in Options.",
-          "rescan": "Check this box and click Submit to re-scan your network for printers. Install the CUPS add-on first if you want to use CUPS."
+          "rescan": "Re-scan the network for printers. Make sure the printer is turned ON before scanning. After turning on the printer, wait ~30 s for it to advertise via mDNS, then check this box and submit."
         }
       },
       "manual_printer": {

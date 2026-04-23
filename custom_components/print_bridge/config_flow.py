@@ -77,8 +77,9 @@ _IPP_SERVICE_TYPES = [
     "_printer._tcp.local.",
 ]
 
-# How long to wait for mDNS responses (seconds)
-_MDNS_TIMEOUT = 4
+# How long to wait for mDNS responses (seconds).
+# Most printers respond within 1-2 s; allow extra time for slow mDNS stacks.
+_MDNS_TIMEOUT = 5
 
 
 # ---------------------------------------------------------------------------
@@ -128,30 +129,63 @@ async def _discover_cups(
 async def _discover_printers_mdns(hass: HomeAssistant) -> list[dict[str, str]]:
     """Discover IPP/AirPrint printers via mDNS from the HA host.
 
-    Browses _ipp._tcp.local., _ipps._tcp.local., _printer._tcp.local.
-    using HA's Zeroconf instance — runs entirely server-side, not in the
-    user's browser.  Waits up to _MDNS_TIMEOUT seconds for responses.
+    Uses a sync ServiceBrowser running in HA's executor thread pool — more
+    reliable than AsyncServiceBrowser because it avoids event-loop scheduling
+    issues with HaZeroconf.  Browses _ipp._tcp.local., _ipps._tcp.local.,
+    _printer._tcp.local. and resolves each service record to a URL inside
+    the add_service callback (while the browser is still live).
 
-    Returns list of {name, url} dicts.  IP/port/path are parsed from the
-    service records — no hardcoded addresses.
+    The printer MUST be turned on and advertising mDNS for discovery to work.
+
+    Returns list of {name, url} dicts with no hardcoded addresses.
     """
-    found: dict[str, dict[str, str]] = {}  # url → info (deduplicate by URL)
+    import threading
 
-    try:
-        from homeassistant.components.zeroconf import async_get_async_instance
+    found: dict[str, dict[str, str]] = {}
+    lock = threading.Lock()
+
+    def _resolve_and_add(zc_inst: Any, type_: str, name: str) -> None:
+        """Resolve one discovered service and add it to *found* (thread-safe)."""
         from zeroconf import ServiceInfo
-        from zeroconf.asyncio import AsyncServiceBrowser
+        info: ServiceInfo | None = zc_inst.get_service_info(type_, name, timeout=2000)
+        if not info or not info.addresses:
+            return
+        host: str | None = None
+        for addr in info.addresses:
+            try:
+                host = socket.inet_ntoa(addr)   # IPv4
+                break
+            except OSError:
+                pass
+        if host is None:
+            return
+        port: int = info.port or 631
+        rp_raw = info.properties.get(b"rp", b"ipp/print")
+        rp: str = (
+            rp_raw.decode("utf-8", errors="replace")
+            if isinstance(rp_raw, bytes)
+            else "ipp/print"
+        )
+        scheme = "https" if "ipps" in type_ else "http"
+        url = f"{scheme}://{host}:{port}/{rp.lstrip('/')}"
+        display = name.rstrip(".").split(".")[0]
+        with lock:
+            if url not in found:
+                found[url] = {"name": display, "url": url}
 
-        aiozc = await async_get_async_instance(hass)
-        zc = aiozc.zeroconf
+    def _sync_browse(zc: Any) -> None:
+        """Browse for IPP services in a thread-pool worker.
+
+        Using sync ServiceBrowser avoids event-loop scheduling issues that
+        AsyncServiceBrowser can have with HaZeroconf.
+        """
+        import time
+        from zeroconf import ServiceBrowser
 
         class _Listener:
-            """Collect discovered IPP service names."""
-            def __init__(self) -> None:
-                self.names: list[tuple[str, str]] = []  # (type_, name)
-
-            def add_service(self, zc_inst, type_: str, name: str) -> None:
-                self.names.append((type_, name))
+            def add_service(self, zc_inst: Any, type_: str, name: str) -> None:
+                # Resolve immediately while the browser is live.
+                _resolve_and_add(zc_inst, type_, name)
 
             def remove_service(self, *_: Any) -> None:
                 pass
@@ -160,33 +194,15 @@ async def _discover_printers_mdns(hass: HomeAssistant) -> list[dict[str, str]]:
                 pass
 
         listener = _Listener()
-        browsers = [
-            AsyncServiceBrowser(zc, stype, listener)
-            for stype in _IPP_SERVICE_TYPES
-        ]
-        await asyncio.sleep(_MDNS_TIMEOUT)
-        for browser in browsers:
-            await browser.async_cancel()
+        browsers = [ServiceBrowser(zc, stype, listener) for stype in _IPP_SERVICE_TYPES]
+        time.sleep(_MDNS_TIMEOUT)
+        for b in browsers:
+            b.cancel()
 
-        # Resolve each discovered service to a URL.
-        for type_, name in listener.names:
-            info: ServiceInfo | None = zc.get_service_info(type_, name, timeout=1500)
-            if not info or not info.addresses:
-                continue
-            try:
-                host = socket.inet_ntoa(info.addresses[0])
-            except Exception:
-                continue
-            port: int = info.port or 631
-            # 'rp' TXT record is the IPP path (e.g. "ipp/print", "printers/MyPrinter")
-            rp_raw = info.properties.get(b"rp", b"ipp/print")
-            rp = rp_raw.decode("utf-8", errors="replace") if isinstance(rp_raw, bytes) else "ipp/print"
-            scheme = "https" if "ipps" in type_ else "http"
-            url = f"{scheme}://{host}:{port}/{rp.lstrip('/')}"
-            display_name = name.rstrip(".").replace(f".{type_.rstrip('.')}", "").split(".")[0]
-            if url not in found:
-                found[url] = {"name": display_name, "url": url}
-
+    try:
+        from homeassistant.components.zeroconf import async_get_async_instance
+        aiozc = await async_get_async_instance(hass)
+        await hass.async_add_executor_job(_sync_browse, aiozc.zeroconf)
     except Exception:
         logger.debug("mDNS printer discovery failed", exc_info=True)
 
@@ -626,12 +642,16 @@ def _build_placeholders(
 ) -> dict[str, str]:
     if mdns_printers:
         names = ", ".join(p["name"] for p in mdns_printers)
-        direct_info = f"Found {len(mdns_printers)} printer(s) on the network via mDNS: {names}"
+        direct_info = f"Found {len(mdns_printers)} printer(s) on the network: {names}"
     else:
         direct_info = (
-            "No printers found via mDNS. "
-            "For a LAN printer, type its IPP URL (e.g. http://192.168.1.x/ipp/print). "
-            "Check the 'Scan again' box to retry discovery."
+            "No printers found on the network. "
+            "Checklist: "
+            "(1) Make sure the printer is turned ON and connected to the same Wi-Fi. "
+            "(2) Check 'Scan again' below and submit to retry. "
+            "(3) If still not found, type the IPP URL manually — "
+            "check your router's connected-devices list for the printer's IP, "
+            "then try http://PRINTER-IP/ipp/print."
         )
 
     if cups_url is None:
