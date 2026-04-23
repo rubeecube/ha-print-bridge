@@ -77,6 +77,15 @@ class PrintJobResult:
     timestamp: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
+    # IMAP identifiers needed to re-fetch and retry this job
+    imap_entry_id: str | None = None
+    imap_uid: str | None = None
+    imap_part_key: str | None = None
+
+    @property
+    def can_retry(self) -> bool:
+        """True if enough IMAP metadata is stored to re-fetch this attachment."""
+        return bool(self.imap_entry_id and self.imap_uid and self.imap_part_key)
 
 
 @dataclass
@@ -263,7 +272,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         booklet_override: bool | None = None,
         sender: str | None = None,
     ) -> PrintJobResult:
-        """Fetch one attachment via imap.fetch_part and print it."""
+        """Fetch one attachment via imap.fetch_part and print it.
+
+        IMAP identifiers are always stored in the result so the job can be
+        retried later via async_retry_job / auto_print.retry_job.
+        """
         try:
             response: dict[str, Any] = await self.hass.services.async_call(
                 "imap",
@@ -277,7 +290,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "imap.fetch_part failed for uid=%s part=%s: %s", uid, part_key, exc
             )
             return PrintJobResult(
-                filename=filename, success=False, error=str(exc), sender=sender
+                filename=filename, success=False, error=str(exc),
+                sender=sender,
+                imap_entry_id=entry_id, imap_uid=uid, imap_part_key=part_key,
             )
 
         try:
@@ -292,7 +307,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         except Exception as exc:
             logger.error("Decoding attachment '%s' failed: %s", filename, exc)
             return PrintJobResult(
-                filename=filename, success=False, error=str(exc), sender=sender
+                filename=filename, success=False, error=str(exc),
+                sender=sender,
+                imap_entry_id=entry_id, imap_uid=uid, imap_part_key=part_key,
             )
 
         effective_duplex = duplex_override or self._duplex_mode
@@ -304,8 +321,63 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         result = await self.async_send_print_job(
             filename, pdf_bytes, effective_duplex, effective_booklet
         )
+        # Attach IMAP identifiers for future retry.
         result.sender = sender
+        result.imap_entry_id = entry_id
+        result.imap_uid = uid
+        result.imap_part_key = part_key
         return result
+
+    # ------------------------------------------------------------------
+    # Retry
+    # ------------------------------------------------------------------
+
+    async def async_retry_job(
+        self,
+        job: PrintJobResult,
+        duplex_override: str | None = None,
+        booklet_override: bool | None = None,
+    ) -> PrintJobResult:
+        """Re-fetch and reprint a previously recorded job.
+
+        Raises HomeAssistantError if the job has no IMAP retry metadata.
+        """
+        from homeassistant.exceptions import HomeAssistantError
+
+        if not job.can_retry:
+            raise HomeAssistantError(
+                f"Cannot retry '{job.filename}': IMAP metadata is not available "
+                "(only jobs received via email can be retried)."
+            )
+
+        logger.debug(
+            "Retrying job '%s' uid=%s entry=%s",
+            job.filename, job.imap_uid, job.imap_entry_id,
+        )
+        result = await self._async_fetch_and_print(
+            entry_id=job.imap_entry_id,       # type: ignore[arg-type]
+            uid=job.imap_uid,                  # type: ignore[arg-type]
+            part_key=job.imap_part_key,        # type: ignore[arg-type]
+            filename=job.filename,
+            duplex_override=duplex_override or job.duplex,
+            booklet_override=booklet_override if booklet_override is not None else job.booklet,
+            sender=job.sender,
+        )
+        self._record_job(result)
+        await self._async_notify_job(result)
+        await self.async_request_refresh()
+        return result
+
+    async def async_retry_last_failed(self) -> PrintJobResult:
+        """Retry the most recent failed job that has IMAP retry metadata."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        for job in self._job_history:
+            if not job.success and job.can_retry:
+                return await self.async_retry_job(job)
+        raise HomeAssistantError(
+            "No failed job with retry information found in history."
+        )
 
     # ------------------------------------------------------------------
     # Public helpers (called from services / button entity)

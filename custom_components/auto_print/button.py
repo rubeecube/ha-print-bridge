@@ -11,7 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BUTTON_CHECK_FILTER, BUTTON_TEST_PAGE, DOMAIN
+from .const import BUTTON_CHECK_FILTER, BUTTON_RETRY_LAST_FAILED, BUTTON_TEST_PAGE, DOMAIN
 from .coordinator import AutoPrintCoordinator
 from .sensor import _device_info
 
@@ -52,6 +52,7 @@ async def async_setup_entry(
     async_add_entities([
         TestPageButton(coordinator, entry),
         CheckFilterButton(coordinator, entry),
+        RetryLastFailedButton(coordinator, entry),
     ])
 
 
@@ -94,3 +95,31 @@ class CheckFilterButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
     async def async_press(self) -> None:
         """Run filter preview and update sensor.auto_print_*_filter_preview."""
         await self.coordinator.async_check_filter()
+
+
+class RetryLastFailedButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
+    """Re-fetch and reprint the most recent failed email print job."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = BUTTON_RETRY_LAST_FAILED
+    _attr_icon = "mdi:printer-alert"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{BUTTON_RETRY_LAST_FAILED}"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def available(self) -> bool:
+        """Only available when there is a failed retryable job in history."""
+        data = self.coordinator.data
+        if not data:
+            return False
+        return any(
+            not j.success and j.can_retry
+            for j in data.job_history
+        )
+
+    async def async_press(self) -> None:
+        """Retry the most recent failed job."""
+        await self.coordinator.async_retry_last_failed()

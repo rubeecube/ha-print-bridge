@@ -77,7 +77,8 @@
     },
     "button": {
       "test_page": { "name": "Print Test Page" },
-      "check_filter": { "name": "Check Filter" }
+      "check_filter": { "name": "Check Filter" },
+      "retry_last_failed": { "name": "Retry Last Failed Job" }
     }
   }
 }

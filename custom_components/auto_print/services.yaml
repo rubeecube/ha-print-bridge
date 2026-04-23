@@ -40,6 +40,52 @@ clear_queue:
   description: >-
     Delete all PDF files currently sitting in the configured print queue folder.
 
+retry_job:
+  name: Retry Print Job
+  description: >-
+    Re-fetch a PDF attachment from the IMAP server and reprint it.
+    Works on any job in the history that was originally received via email.
+    Use the job_log sensor attributes to find the job_index or uid.
+  fields:
+    job_index:
+      name: Job Index
+      description: >-
+        Position in job history (0 = most recent). Defaults to the most
+        recent failed job when neither job_index nor uid is provided.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 49
+          mode: box
+    uid:
+      name: IMAP UID
+      description: >-
+        The IMAP message UID of the job to retry.  Available as the 'uid'
+        field in sensor.auto_print_*_job_log attributes.
+      required: false
+      selector:
+        text:
+    duplex:
+      name: Duplex Override
+      description: Override the duplex mode for this retry (leave blank to reuse original).
+      required: false
+      selector:
+        select:
+          options:
+            - label: "One-sided"
+              value: "one-sided"
+            - label: "Two-sided — portrait (long edge)"
+              value: "two-sided-long-edge"
+            - label: "Two-sided — landscape (short edge)"
+              value: "two-sided-short-edge"
+    booklet:
+      name: Booklet Override
+      description: Override booklet mode for this retry.
+      required: false
+      selector:
+        boolean:
+
 check_filter:
   name: Check Filter
   description: >-

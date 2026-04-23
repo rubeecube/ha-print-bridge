@@ -64,11 +64,13 @@ cards:
       {% if jobs is none or jobs | count == 0 %}
       *No print jobs recorded yet.*
       {% else %}
-      | Time | File | Status | Sender | Duplex | Booklet |
-      |------|------|:------:|--------|--------|:-------:|
+      | # | Time | File | Status | Sender | Duplex | Retry |
+      |---|------|------|:------:|--------|--------|:-----:|
       {% for j in jobs %}
-      | {{ j.timestamp | as_datetime | as_local | strftime('%d/%m %H:%M') }} | `{{ j.filename }}` | {{ '✅' if j.success else '❌' }} | {{ j.sender or '—' }} | {{ j.duplex or '—' }} | {{ '📖' if j.booklet else '—' }} |
+      | {{ j.index }} | {{ j.timestamp | as_datetime | as_local | strftime('%d/%m %H:%M') }} | `{{ j.filename }}` | {{ '✅' if j.success else '❌' }} | {{ j.sender or '—' }} | {{ j.duplex or '—' }} | {{ '🔄' if j.can_retry else '—' }} |
       {% endfor %}
+
+      *🔄 = retryable — use index with `auto_print.retry_job`*
       {% endif %}
 
   # ── Statistics graph ───────────────────────────────────────────────────────
@@ -113,6 +115,9 @@ cards:
   - type: entities
     title: Actions
     entities:
+      - entity: button.auto_print_PRINTER_NAME_retry_last_failed_job
+        name: Retry Last Failed Job
+
       - entity: button.auto_print_PRINTER_NAME_check_filter
         name: Check Filter (scan mailbox)
 

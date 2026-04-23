@@ -28,6 +28,7 @@ from .const import (
     SERVICE_CLEAR_QUEUE,
     SERVICE_PRINT_FILE,
     SERVICE_PROCESS_IMAP_PART,
+    SERVICE_RETRY_JOB,
 )
 from .coordinator import AutoPrintCoordinator
 
@@ -96,10 +97,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -
             and e.state is ConfigEntryState.LOADED
         ]
         if not remaining:
-            hass.services.async_remove(DOMAIN, SERVICE_PRINT_FILE)
-            hass.services.async_remove(DOMAIN, SERVICE_CLEAR_QUEUE)
-            hass.services.async_remove(DOMAIN, SERVICE_PROCESS_IMAP_PART)
-            hass.services.async_remove(DOMAIN, SERVICE_CHECK_FILTER)
+            for svc in (
+                SERVICE_PRINT_FILE, SERVICE_CLEAR_QUEUE,
+                SERVICE_PROCESS_IMAP_PART, SERVICE_CHECK_FILTER, SERVICE_RETRY_JOB,
+            ):
+                hass.services.async_remove(DOMAIN, svc)
 
     return unload_ok
 
@@ -177,6 +179,65 @@ def _register_services(hass: HomeAssistant) -> None:
         _handle_check_filter,
         schema=vol.Schema(
             {vol.Optional("imap_entry_id"): cv.string}
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def _handle_retry_job(call: ServiceCall) -> dict:
+        coordinator = _get_any_coordinator(hass)
+        job_index: int | None = call.data.get("job_index")
+        imap_uid: str | None = call.data.get("uid")
+        duplex: str | None = call.data.get("duplex")
+        booklet: bool | None = call.data.get("booklet")
+
+        if job_index is not None:
+            history = coordinator._job_history
+            if job_index < 0 or job_index >= len(history):
+                raise HomeAssistantError(
+                    f"job_index {job_index} is out of range (history has {len(history)} entries)."
+                )
+            job = history[job_index]
+        elif imap_uid:
+            job = next(
+                (j for j in coordinator._job_history if j.imap_uid == imap_uid),
+                None,
+            )
+            if job is None:
+                raise HomeAssistantError(
+                    f"No job with uid='{imap_uid}' found in history."
+                )
+        else:
+            # Default: retry last failed
+            job = next(
+                (j for j in coordinator._job_history if not j.success and j.can_retry),
+                None,
+            )
+            if job is None:
+                raise HomeAssistantError("No failed retryable job found in history.")
+
+        result = await coordinator.async_retry_job(
+            job,
+            duplex_override=duplex,
+            booklet_override=booklet,
+        )
+        return {
+            "filename": result.filename,
+            "success": result.success,
+            "error": result.error,
+            "timestamp": result.timestamp,
+        }
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RETRY_JOB,
+        _handle_retry_job,
+        schema=vol.Schema(
+            {
+                vol.Optional("job_index"): vol.All(int, vol.Range(min=0)),
+                vol.Optional("uid"): cv.string,
+                vol.Optional("duplex"): vol.In(DUPLEX_MODES),
+                vol.Optional("booklet"): cv.boolean,
+            }
         ),
         supports_response=SupportsResponse.OPTIONAL,
     )

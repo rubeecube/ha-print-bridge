@@ -139,6 +139,7 @@ class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
         return {
             "jobs": [
                 {
+                    "index": i,
                     "timestamp": j.timestamp,
                     "filename": j.filename,
                     "success": j.success,
@@ -146,8 +147,10 @@ class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
                     "sender": j.sender,
                     "duplex": j.duplex,
                     "booklet": j.booklet,
+                    "can_retry": j.can_retry,
+                    "uid": j.imap_uid,
                 }
-                for j in data.job_history
+                for i, j in enumerate(data.job_history)
             ]
         }
 
