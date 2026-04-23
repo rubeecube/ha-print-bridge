@@ -123,6 +123,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) ->
         hass.bus.async_listen("imap_content", coordinator.async_handle_imap_event)
     )
 
+    # Populate the FilterPreviewSensor on startup so the email list is visible
+    # immediately without the user having to press "Scan Mailbox" manually.
+    async def _initial_filter_check() -> None:
+        try:
+            await coordinator.async_check_filter()
+        except Exception:
+            logger.debug("Initial filter check skipped (IMAP not yet configured)", exc_info=True)
+
+    hass.async_create_task(_initial_filter_check())
+
     # Register domain-level services once; guard against duplicate registration.
     if not hass.services.has_service(DOMAIN, SERVICE_PRINT_FILE):
         _register_services(hass)

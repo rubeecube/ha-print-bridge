@@ -2,7 +2,7 @@ blueprint:
   name: "Print Bridge — Email to Printer"
   description: >
     Print PDF email attachments with configurable sender filters, subject
-    keyword rules, and per-condition duplex / booklet settings.
+    pre-filter, and per-PDF-filename keyword rules for duplex / booklet settings.
 
 
     **Requires:**
@@ -17,8 +17,9 @@ blueprint:
     **How it works:**
 
     Triggers on every `imap_content` event from the selected IMAP account.
-    Filters by sender and subject, then calls `print_bridge.process_imap_part`
-    for each PDF attachment with the computed duplex/booklet settings.
+    Filters by sender and subject, then — for each PDF attachment — evaluates
+    duplex and booklet keywords against the **PDF filename**, not the email
+    subject. Calls `print_bridge.process_imap_part` with the computed settings.
     Optionally marks the email as seen.
 
   domain: automation
@@ -52,7 +53,7 @@ blueprint:
         text:
           multiline: true
 
-    # ── Subject filter ────────────────────────────────────────────────────
+    # ── Subject pre-filter ────────────────────────────────────────────────
 
     subject_filter:
       name: Subject Must Contain (optional)
@@ -83,7 +84,7 @@ blueprint:
 
     default_duplex:
       name: Default Duplex Mode
-      description: Applied to all jobs unless overridden by a keyword rule below.
+      description: Applied to all jobs unless overridden by a PDF-filename keyword rule below.
       default: "two-sided-long-edge"
       selector:
         select:
@@ -95,40 +96,43 @@ blueprint:
             - label: "Two-sided — landscape / short edge (for booklets)"
               value: "two-sided-short-edge"
 
-    # ── Keyword rules — duplex override ───────────────────────────────────
+    # ── Keyword rules — duplex override (matched against PDF filename) ─────
 
-    one_sided_subject_keywords:
-      name: One-sided Keywords (Subject)
+    one_sided_filename_keywords:
+      name: One-sided Keywords (PDF Filename)
       description: >
-        Comma-separated keywords. If the email **subject** contains any of
-        these, the job is printed **one-sided**, overriding the default.
+        Comma-separated keywords. If the **PDF filename** contains any of
+        these (case-insensitive), the job is printed **one-sided**, overriding
+        the default.
 
-        Example: `RECEIPT, INVOICE, TICKET, SCAN`
+        Example: `receipt, invoice, ticket, scan`
       default: ""
       selector:
         text:
 
-    two_sided_long_subject_keywords:
-      name: Two-sided Portrait Keywords (Subject)
+    two_sided_long_filename_keywords:
+      name: Two-sided Portrait Keywords (PDF Filename)
       description: >
-        Comma-separated keywords. If the email **subject** contains any of
-        these, the job is printed **two-sided long-edge (portrait)**.
+        Comma-separated keywords. If the **PDF filename** contains any of
+        these (case-insensitive), the job is printed **two-sided long-edge
+        (portrait)**.
 
-        Example: `LETTER, REPORT, CONTRACT`
+        Example: `letter, report, contract`
       default: ""
       selector:
         text:
 
-    # ── Booklet rules ─────────────────────────────────────────────────────
+    # ── Booklet rules (matched against PDF filename) ──────────────────────
 
-    booklet_subject_keywords:
-      name: Booklet Keywords (Subject)
+    booklet_filename_keywords:
+      name: Booklet Keywords (PDF Filename)
       description: >
-        Comma-separated keywords. If the email **subject** contains any of
-        these, pages are reordered for **saddle-stitch booklet** printing
-        (two-sided short-edge). This overrides the default duplex setting.
+        Comma-separated keywords. If the **PDF filename** contains any of
+        these (case-insensitive), pages are reordered for **saddle-stitch
+        booklet** printing (two-sided short-edge). Overrides the default
+        duplex setting.
 
-        Example: `BOOKLET, PROGRAMME, LIVRET, BULLETIN`
+        Example: `booklet, programme, livret, bulletin`
       default: ""
       selector:
         text:
@@ -137,7 +141,7 @@ blueprint:
       name: Booklet Senders (always booklet)
       description: >
         Comma-separated email addresses. Mail from these senders is **always**
-        printed as a booklet, regardless of the subject.
+        printed as a booklet, regardless of the PDF filename.
 
         Example: `liturgie@example.com`
       default: ""
@@ -164,7 +168,8 @@ trigger:
       entry_id: !input imap_entry_id
 
 # ── Variables ──────────────────────────────────────────────────────────────
-# All inputs are captured here so they can be referenced in templates below.
+# Top-level variables capture inputs and event shortcuts used in conditions
+# and inside the repeat loop.
 
 variables:
   imap_entry_id: !input imap_entry_id
@@ -172,9 +177,9 @@ variables:
   folder_filter_raw: !input folder_filter
   subject_filter_raw: !input subject_filter
   default_duplex: !input default_duplex
-  one_sided_kw_raw: !input one_sided_subject_keywords
-  two_sided_long_kw_raw: !input two_sided_long_subject_keywords
-  booklet_subj_kw_raw: !input booklet_subject_keywords
+  one_sided_kw_raw: !input one_sided_filename_keywords
+  two_sided_long_kw_raw: !input two_sided_long_filename_keywords
+  booklet_fname_kw_raw: !input booklet_filename_keywords
   booklet_senders_raw: !input booklet_senders
   mark_as_seen: !input mark_as_seen
 
@@ -185,14 +190,14 @@ variables:
   _sender_list: >
     {{ allowed_senders_raw | string | lower | split(',')
        | map('trim') | reject('eq', '') | list }}
-  _one_sided_list: >
+  _one_sided_fname_list: >
     {{ one_sided_kw_raw | string | lower | split(',')
        | map('trim') | reject('eq', '') | list }}
-  _two_sided_long_list: >
+  _two_sided_long_fname_list: >
     {{ two_sided_long_kw_raw | string | lower | split(',')
        | map('trim') | reject('eq', '') | list }}
-  _booklet_subj_list: >
-    {{ booklet_subj_kw_raw | string | lower | split(',')
+  _booklet_fname_list: >
+    {{ booklet_fname_kw_raw | string | lower | split(',')
        | map('trim') | reject('eq', '') | list }}
   _booklet_sender_list: >
     {{ booklet_senders_raw | string | lower | split(',')
@@ -204,22 +209,6 @@ variables:
   _subject: "{{ trigger.event.data.subject | lower }}"
   _uid: "{{ trigger.event.data.uid | string }}"
   _parts: "{{ trigger.event.data.parts }}"
-
-  # ── Computed print settings for this email ──
-  _is_booklet: >
-    {{ (_booklet_subj_list | select('in', _subject) | list | count > 0)
-       or (_sender in _booklet_sender_list) }}
-
-  _effective_duplex: >
-    {% if _is_booklet %}
-      two-sided-short-edge
-    {% elif _one_sided_list | select('in', _subject) | list | count > 0 %}
-      one-sided
-    {% elif _two_sided_long_list | select('in', _subject) | list | count > 0 %}
-      two-sided-long-edge
-    {% else %}
-      {{ default_duplex }}
-    {% endif %}
 
 # ── Conditions ──────────────────────────────────────────────────────────────
 
@@ -259,6 +248,26 @@ action:
         - condition: template
           value_template: "{{ repeat.item[1].content_type == 'application/pdf' }}"
 
+        # Compute per-attachment duplex/booklet settings from the PDF filename.
+        - variables:
+            _pdf_name: >
+              {{ (repeat.item[1].filename
+                  or repeat.item[1].get('file_name', '')
+                  or ('attachment_' ~ repeat.item[0] ~ '.pdf')) | lower }}
+            _pdf_is_booklet: >
+              {{ (_booklet_fname_list | select('in', _pdf_name) | list | count > 0)
+                 or (_sender in _booklet_sender_list) }}
+            _pdf_duplex: >
+              {% if _pdf_is_booklet %}
+                two-sided-short-edge
+              {% elif _one_sided_fname_list | select('in', _pdf_name) | list | count > 0 %}
+                one-sided
+              {% elif _two_sided_long_fname_list | select('in', _pdf_name) | list | count > 0 %}
+                two-sided-long-edge
+              {% else %}
+                {{ default_duplex }}
+              {% endif %}
+
         - action: print_bridge.process_imap_part
           data:
             entry_id: "{{ trigger.event.data.entry_id }}"
@@ -268,8 +277,8 @@ action:
               {{ repeat.item[1].filename
                  or repeat.item[1].get('file_name')
                  or ('attachment_' ~ repeat.item[0] ~ '.pdf') }}
-            duplex: "{{ _effective_duplex }}"
-            booklet: "{{ _is_booklet }}"
+            duplex: "{{ _pdf_duplex }}"
+            booklet: "{{ _pdf_is_booklet }}"
 
   - alias: "Mark email as seen (optional)"
     if:
