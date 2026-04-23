@@ -33,11 +33,11 @@
     - trigger: event
       event_type: imap_content
       event_data:
-        sender: print@bokobza.info
+        sender: print@example.com
     - trigger: event
       event_type: imap_content
       event_data:
-        sender: ruben@bokobza.email
+        sender: user@example.com
   conditions:
     # FIX: check the live event data for PDF parts, not a stale sensor attribute.
     - condition: template

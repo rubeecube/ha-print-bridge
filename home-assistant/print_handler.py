@@ -11,7 +11,7 @@ Environment variables (override compiled-in defaults):
     AUTO_PRINT_PRINTER_NAME   — CUPS queue name  (default: Canon_MG3600_series)
     AUTO_PRINT_CUPS_URL       — base URL for CUPS (default: http://10.0.0.23:631)
     AUTO_PRINT_BOOKLET_MARKER — substring that flags a file as a booklet job
-                                (default: Au Puits)
+                                (default: Programme)
     AUTO_PRINT_LOG_FILE       — path for the append-only log file (optional)
 """
 
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 PRINTER_NAME: str = os.environ.get("AUTO_PRINT_PRINTER_NAME", "Canon_MG3600_series")
 CUPS_BASE_URL: str = os.environ.get("AUTO_PRINT_CUPS_URL", "http://10.0.0.23:631")
 IPP_URL: str = f"{CUPS_BASE_URL.rstrip('/')}/printers/{PRINTER_NAME}"
-BOOKLET_MARKER: str = os.environ.get("AUTO_PRINT_BOOKLET_MARKER", "Au Puits")
+BOOKLET_MARKER: str = os.environ.get("AUTO_PRINT_BOOKLET_MARKER", "Programme")
 LOG_FILE: str | None = os.environ.get("AUTO_PRINT_LOG_FILE")
 
 

@@ -200,9 +200,9 @@ async def test_empty_allowed_senders_accepts_all(hass: HomeAssistant) -> None:
 
 async def test_booklet_pattern_sets_booklet_flag(hass: HomeAssistant) -> None:
     _, coordinator = await _setup_coordinator(
-        hass, options={**MOCK_OPTIONS, "booklet_patterns": ["Au Puits"]}
+        hass, options={**MOCK_OPTIONS, "booklet_patterns": ["Programme"]}
     )
-    success = PrintJobResult(filename="Au Puits.pdf", success=True)
+    success = PrintJobResult(filename="Programme.pdf", success=True)
 
     with (
         patch.object(coordinator, "_async_fetch_and_print",
@@ -218,7 +218,7 @@ async def test_booklet_pattern_sets_booklet_flag(hass: HomeAssistant) -> None:
 
         # Direct: verify is_booklet_job returns True for this filename
         from custom_components.auto_print.print_handler import is_booklet_job
-        assert is_booklet_job("Au Puits de Jacob.pdf", ["Au Puits"]) is True
+        assert is_booklet_job("Sunday Programme.pdf", ["Programme"]) is True
 
 
 # ---------------------------------------------------------------------------

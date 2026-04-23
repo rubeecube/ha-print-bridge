@@ -84,7 +84,7 @@ The print handler reads from environment variables (overridable at runtime):
 |---|---|---|
 | `AUTO_PRINT_PRINTER_NAME` | `Canon_MG3600_series` | CUPS queue name |
 | `AUTO_PRINT_CUPS_URL` | `http://10.0.0.23:631` | CUPS base URL |
-| `AUTO_PRINT_BOOKLET_MARKER` | `Au Puits` | Substring triggering booklet mode |
+| `AUTO_PRINT_BOOKLET_MARKER` | `Programme` | Substring triggering booklet mode |
 | `AUTO_PRINT_LOG_FILE` | *(none)* | Optional log file path |
 
 ---

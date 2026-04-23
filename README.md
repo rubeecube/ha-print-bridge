@@ -154,8 +154,8 @@ A: Yes — add one address per line in **Allowed Senders**, or leave it empty to
 **Q: What if my PDF is very large?**  
 A: Auto Print calls `imap.fetch_part` which has no size limit (unlike the 32 KB event body limit). Large PDFs are handled correctly.
 
-**Q: How do I enable booklet printing for "Au Puits de Jacob" programmes?**  
-A: Add `Au Puits` to **Booklet Patterns** in the options. Any email attachment whose filename contains that substring will be automatically reordered and printed two-sided on the short edge.
+**Q: How do I enable booklet printing for "Sunday Programme" booklets?**  
+A: Add `Programme` to **Booklet Patterns** in the options. Any email attachment whose filename contains that substring will be automatically reordered and printed two-sided on the short edge.
 
 **Q: CUPS is on a different host from HA. What URL do I use?**  
 A: Use `http://<cups-host-ip>:631`. If using the CUPS add-on on HA OS with host networking, the host IP is typically your HA host's LAN IP.

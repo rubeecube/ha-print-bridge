@@ -298,7 +298,7 @@ async def test_options_flow_persists_all_fields(
     new_input = {
         "allowed_senders": "a@example.com\nb@example.com",
         "duplex_mode": "one-sided",
-        "booklet_patterns": "Au Puits\nBulletin",
+        "booklet_patterns": "Programme\nBulletin",
         "auto_delete": False,
         "queue_folder": "/tmp/q2",
     }
@@ -307,7 +307,7 @@ async def test_options_flow_persists_all_fields(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["allowed_senders"] == ["a@example.com", "b@example.com"]
-    assert entry.options["booklet_patterns"] == ["Au Puits", "Bulletin"]
+    assert entry.options["booklet_patterns"] == ["Programme", "Bulletin"]
     assert entry.options["duplex_mode"] == "one-sided"
     assert entry.options["auto_delete"] is False
 

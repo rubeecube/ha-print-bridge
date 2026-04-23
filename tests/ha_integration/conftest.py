@@ -45,7 +45,7 @@ MOCK_CONFIG_DATA: dict = {
 MOCK_OPTIONS: dict = {
     "allowed_senders": ["sender@example.com"],
     "duplex_mode": "two-sided-long-edge",
-    "booklet_patterns": ["Au Puits"],
+    "booklet_patterns": ["Programme"],
     "auto_delete": True,
     "queue_folder": "/tmp/auto_print_queue",
 }

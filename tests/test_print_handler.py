@@ -101,14 +101,14 @@ def test_determine_sides(duplex_mode, booklet, expected_sides):
 @pytest.mark.parametrize(
     "filename, patterns, expected",
     [
-        ("Au Puits de Jacob.pdf", ["Au Puits"], True),
-        ("au puits de jacob.pdf", ["Au Puits"], True),    # case-insensitive
-        ("AU PUITS programme.pdf", ["au puits"], True),
-        ("regular_invoice.pdf", ["Au Puits"], False),
-        ("", ["Au Puits"], False),
+        ("Sunday Programme.pdf", ["Programme"], True),
+        ("sunday programme.pdf", ["Programme"], True),    # case-insensitive
+        ("SUNDAY PROGRAMME.pdf", ["programme"], True),
+        ("regular_invoice.pdf", ["Programme"], False),
+        ("", ["Programme"], False),
         ("booklet.pdf", [], False),                        # no patterns configured
-        ("Bulletin.pdf", ["Bulletin", "Au Puits"], True),  # first pattern matches
-        ("other.pdf", ["Bulletin", "Au Puits"], False),
+        ("Bulletin.pdf", ["Bulletin", "Programme"], True),  # first pattern matches
+        ("other.pdf", ["Bulletin", "Programme"], False),
     ],
 )
 def test_is_booklet_job(filename, patterns, expected):
