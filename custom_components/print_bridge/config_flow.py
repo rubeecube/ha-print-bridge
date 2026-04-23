@@ -536,10 +536,10 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 CONF_AUTO_PRINT_ENABLED,
                 default=options.get(CONF_AUTO_PRINT_ENABLED, DEFAULT_AUTO_PRINT_ENABLED),
             ): bool,
-            vol.Required(
+            vol.Optional(
                 CONF_ALLOWED_SENDERS, default="\n".join(current_senders)
             ): str,
-            vol.Required(
+            vol.Optional(
                 CONF_FOLDER_FILTER, default="\n".join(current_folders)
             ): str,
         }
@@ -554,7 +554,7 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 CONF_DUPLEX_MODE,
                 default=options.get(CONF_DUPLEX_MODE, DEFAULT_DUPLEX_MODE),
             ): vol.In(DUPLEX_MODES),
-            vol.Required(
+            vol.Optional(
                 CONF_BOOKLET_PATTERNS, default="\n".join(current_patterns)
             ): str,
             vol.Required(
@@ -569,7 +569,7 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 CONF_EMAIL_ACTION,
                 default=options.get(CONF_EMAIL_ACTION, DEFAULT_EMAIL_ACTION),
             ): vol.In(EMAIL_ACTIONS),
-            vol.Required(
+            vol.Optional(
                 CONF_EMAIL_ARCHIVE_FOLDER,
                 default=options.get(CONF_EMAIL_ARCHIVE_FOLDER, DEFAULT_EMAIL_ARCHIVE_FOLDER),
             ): str,
@@ -585,11 +585,11 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 CONF_SCHEDULE_ENABLED,
                 default=options.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED),
             ): bool,
-            vol.Required(
+            vol.Optional(
                 CONF_SCHEDULE_START,
                 default=options.get(CONF_SCHEDULE_START, DEFAULT_SCHEDULE_START),
             ): str,
-            vol.Required(
+            vol.Optional(
                 CONF_SCHEDULE_END,
                 default=options.get(CONF_SCHEDULE_END, DEFAULT_SCHEDULE_END),
             ): str,

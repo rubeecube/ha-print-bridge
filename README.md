@@ -189,6 +189,48 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 
 ---
 
+## After Setup — Where to find everything
+
+After configuring the integration you will see a notification:
+**"Print Bridge — Action required"** — follow the links in it, then dismiss it.
+
+### 1. Find your entities
+
+> Settings → Devices & Services → Integrations → **Print Bridge** → click the device card
+
+All sensors, buttons, and binary sensors appear here. You can press **Check Filter** directly from this page to scan your mailbox.
+
+### 2. Add the management dashboard
+
+Copy `lovelace/print_bridge_audit.yaml` from the repo into a new dashboard view:
+
+> Your Dashboard → Edit → Add View → Manual configuration (YAML) → paste the file contents
+
+Replace `YOUR_SLUG` with the entity slug shown in Developer Tools → States when you search "print\_bridge" (e.g. `canonmg3600series`).
+
+The dashboard includes a **one-click blueprint install button** — press it to add the automation blueprint.
+
+### 3. Choose your printing mode
+
+Go to **Settings → Print Bridge → Configure**:
+
+- **Enable automatic printing = On** — simple setup; Print Bridge prints all PDFs from allowed senders automatically.
+- **Enable automatic printing = Off** (default) — use the automation blueprint for per-sender / per-keyword rules.
+
+### 4. Enable debug logging (troubleshooting)
+
+Add to `configuration.yaml`:
+
+```yaml
+logger:
+  logs:
+    custom_components.print_bridge: debug
+```
+
+Then go to **Settings → System → Logs** to view debug output. This shows each discovery step, event received, and print job stage.
+
+---
+
 ## Entities
 
 | Entity | Type | State | Key attributes |
