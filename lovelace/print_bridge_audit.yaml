@@ -74,7 +74,7 @@ cards:
     icon: mdi:puzzle-plus
     tap_action:
       action: url
-      url_path: "https://my.home-assistant.io/redirect/blueprint_import?url=https%3A%2F%2Fgithub.com%2Frubeecube%2Fha-print-bridge%2Fblob%2Fmain%2Fbluprints%2Fautomation%2Fprint_bridge%2Fprint_from_email.yaml"
+      url_path: "https://my.home-assistant.io/redirect/blueprint_import?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Frubeecube%2Fha-print-bridge%2Fmain%2Fblueprints%2Fautomation%2Fprint_bridge%2Fprint_from_email.yaml"
 
   # ── Mailbox scan results (auto-detected, no slug) ─────────────────────────
   - type: markdown
