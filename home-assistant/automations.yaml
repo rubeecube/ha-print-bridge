@@ -1,0 +1,94 @@
+# Home Assistant automations for the auto-print pipeline.
+#
+# Include from configuration.yaml:
+#   automation: !include home-assistant/automations.yaml
+#
+# Prerequisites:
+#   - HA IMAP integration configured (fires imap_content events)
+#   - input_boolean.print_duplex created
+#   - folder_watcher integration watching /media/print_queue
+#   - shell_commands.yaml included under shell_command:
+#   - Python scripts deployed to /config/
+#
+# FIX SUMMARY vs original code:
+#   Automation 1:
+#     - Condition now checks trigger.event.data.parts directly (live event data)
+#       instead of a potentially stale sensor attribute.
+#     - Downloaded PDFs are deleted by process_print_queue after printing.
+#   Automation 2:
+#     - duplex_status now reads input_boolean.print_duplex instead of being
+#       hardcoded to "on".
+#     - delete_printed_file action is enabled.
+
+# ---------------------------------------------------------------------------
+# Automation 1: OVH IMAP Bridge
+# Iterates through email parts and prints PDFs via Python to bypass HA's
+# 256 KB event-data limit.
+# ---------------------------------------------------------------------------
+- alias: "Printer: OVH IMAP Bridge"
+  description: >-
+    Iterates through email parts and prints PDFs via Python to bypass HA
+    memory limits
+  triggers:
+    - trigger: event
+      event_type: imap_content
+      event_data:
+        sender: print@bokobza.info
+    - trigger: event
+      event_type: imap_content
+      event_data:
+        sender: ruben@bokobza.email
+  conditions:
+    # FIX: check the live event data for PDF parts, not a stale sensor attribute.
+    - condition: template
+      value_template: >-
+        {{ trigger.event.data.parts.values() | list
+           | selectattr('content_type', 'equalto', 'application/pdf')
+           | list | count > 0 }}
+  actions:
+    - repeat:
+        # parts is a dict: {'1': {content_type, filename, …}, '2': {…}, …}
+        # dictsort turns it into [('1', {…}), ('2', {…}), …] sorted by key.
+        for_each: "{{ trigger.event.data.parts | dictsort }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ repeat.item[1].content_type == 'application/pdf' }}"
+            then:
+              - action: shell_command.process_print_queue
+                data:
+                  uid: "{{ trigger.event.data.uid }}"
+                  # FIX: filename is now forwarded to pdf_downloader.py
+                  filename: "{{ repeat.item[1].filename }}"
+                  duplex_state: "{{ states('input_boolean.print_duplex') }}"
+  mode: queued
+  max: 10
+
+# ---------------------------------------------------------------------------
+# Automation 2: Execute Print Job
+# Triggered when a file lands in /media/print_queue (folder_watcher).
+# ---------------------------------------------------------------------------
+- alias: "Printer: Execute Print Job"
+  description: Triggered when a file lands in /media/print_queue
+  triggers:
+    - entity_id: event.folder_watcher_media_print_queue
+      trigger: state
+  conditions:
+    - condition: or
+      conditions:
+        - condition: template
+          value_template: "{{ trigger.to_state.attributes.event_type == 'created' }}"
+        - condition: template
+          value_template: "{{ trigger.to_state.attributes.event_type == 'modified' }}"
+  actions:
+    - action: shell_command.print_pdf
+      data:
+        file_path: "{{ trigger.to_state.attributes.path }}"
+        # FIX: reads duplex state from input_boolean instead of hardcoding "on"
+        duplex_status: "{{ states('input_boolean.print_duplex') }}"
+    # FIX: delete the file after printing (was disabled in original)
+    - action: shell_command.delete_printed_file
+      data:
+        file_path: "{{ trigger.to_state.attributes.path }}"
+  mode: queued
+  max: 10

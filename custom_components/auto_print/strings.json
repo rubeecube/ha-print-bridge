@@ -1,0 +1,82 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Mail Server",
+        "description": "Enter the IMAP server details for the mailbox that receives print jobs.",
+        "data": {
+          "imap_server": "IMAP Server",
+          "imap_port": "Port",
+          "imap_use_ssl": "Use SSL/TLS",
+          "imap_username": "Username",
+          "imap_password": "Password",
+          "imap_folder": "Folder",
+          "allowed_senders": "Allowed Senders (one per line)"
+        },
+        "data_description": {
+          "allowed_senders": "Only emails from these addresses will trigger a print job.",
+          "imap_folder": "The IMAP folder to watch for new messages (e.g. INBOX)."
+        }
+      },
+      "printer": {
+        "title": "Printer",
+        "description": "Enter the CUPS server details and the printer queue name.",
+        "data": {
+          "cups_url": "CUPS Base URL",
+          "printer_name": "Printer Name (CUPS queue name)"
+        },
+        "data_description": {
+          "cups_url": "Base URL of your CUPS server, e.g. http://10.0.0.23:631",
+          "printer_name": "The queue name as registered in CUPS, e.g. Canon_MG3600_series"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect_imap": "Cannot connect to the IMAP server. Check the host and port.",
+      "invalid_auth": "Invalid username or password.",
+      "cannot_connect_cups": "Cannot reach the CUPS server. Check the URL.",
+      "unknown": "Unexpected error — see the Home Assistant logs for details."
+    },
+    "abort": {
+      "already_configured": "This mail account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Auto Print Options",
+        "data": {
+          "duplex_mode": "Default Duplex Mode",
+          "booklet_patterns": "Booklet Filename Patterns (one per line)",
+          "auto_delete": "Delete PDF after printing",
+          "queue_folder": "Print Queue Folder",
+          "poll_interval_minutes": "Poll Interval (minutes)"
+        },
+        "data_description": {
+          "booklet_patterns": "If the PDF filename contains any of these substrings the job is printed as a booklet (two-sided short-edge with pages reordered).",
+          "queue_folder": "Folder where PDFs are saved before printing. Must be writable by Home Assistant."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "queue_depth": {
+        "name": "Print Queue Depth"
+      },
+      "last_job": {
+        "name": "Last Print Job"
+      }
+    },
+    "binary_sensor": {
+      "printer_online": {
+        "name": "Printer Online"
+      }
+    },
+    "button": {
+      "test_page": {
+        "name": "Print Test Page"
+      }
+    }
+  }
+}

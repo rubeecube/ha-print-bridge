@@ -1,0 +1,35 @@
+# /config/shell_commands.yaml
+#
+# Include from configuration.yaml:
+#   shell_command: !include shell_commands.yaml
+#
+# Requires:
+#   - python3 available in the HA environment (HAOS has it)
+#   - pypdf installed: pip3 install pypdf
+#   - requests installed: pip3 install requests
+#   - /media/print_queue/ exists and is writable
+
+# Send a PDF directly to the printer via IPP.
+# {{ file_path }}    — absolute path to the PDF file
+# {{ duplex_status }} — "on" or "off"  (maps to input_boolean state)
+print_pdf: >-
+  python3 /config/print_handler.py "{{ file_path }}" "{{ duplex_status }}"
+
+# Remove a file from the print queue.
+delete_printed_file: >-
+  rm -- "{{ file_path }}"
+
+# Download a PDF attachment via IMAP and immediately print it.
+# FIX: filename is now passed as the second argument to pdf_downloader.py
+# FIX: file is removed from the queue after a successful print
+# {{ uid }}          — IMAP UID of the email
+# {{ filename }}     — exact filename of the attachment to retrieve
+# {{ duplex_state }} — value from input_boolean.print_duplex ("on" or "off")
+process_print_queue: >-
+  FILE_PATH=$(python3 /config/pdf_downloader.py "{{ uid }}" "{{ filename }}");
+  if [ -n "$FILE_PATH" ] && [ -f "$FILE_PATH" ]; then
+    python3 /config/print_handler.py "$FILE_PATH" "{{ duplex_state }}";
+    rm -- "$FILE_PATH";
+  else
+    echo "pdf_downloader returned no file for uid={{ uid }} filename={{ filename }}" >&2;
+  fi

@@ -1,0 +1,17 @@
+# Credentials — never commit
+.env
+
+# Python artifacts
+*.pyc
+*.pyo
+__pycache__/
+*.egg-info/
+
+# Virtual environment
+venv/
+.venv/
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/

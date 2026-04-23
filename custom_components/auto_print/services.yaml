@@ -1,0 +1,41 @@
+print_file:
+  name: Print File
+  description: >-
+    Send a PDF file from the Home Assistant filesystem to the configured printer.
+  fields:
+    file_path:
+      name: File Path
+      description: Absolute path to the PDF file on the Home Assistant filesystem.
+      required: true
+      example: /media/print_queue/document.pdf
+      selector:
+        text:
+    duplex:
+      name: Duplex Mode
+      description: >-
+        Override the default duplex mode for this job.
+        Leave empty to use the value configured in the integration options.
+      required: false
+      selector:
+        select:
+          options:
+            - label: "One-sided"
+              value: "one-sided"
+            - label: "Two-sided — portrait (long edge)"
+              value: "two-sided-long-edge"
+            - label: "Two-sided — landscape (short edge)"
+              value: "two-sided-short-edge"
+    booklet:
+      name: Booklet Mode
+      description: >-
+        Reorder pages for saddle-stitch booklet printing.
+        Overrides automatic booklet detection based on filename patterns.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+clear_queue:
+  name: Clear Print Queue
+  description: >-
+    Delete all PDF files currently sitting in the configured print queue folder.
