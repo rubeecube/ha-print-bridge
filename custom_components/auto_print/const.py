@@ -8,6 +8,14 @@ DOMAIN = "auto_print"
 CONF_CUPS_URL = "cups_url"
 CONF_PRINTER_NAME = "printer_name"
 
+# Optional: direct IPP URL (bypasses CUPS entirely).
+# When set, the component sends Print-Job straight to the printer.
+# Examples:
+#   http://10.0.0.23/ipp/print         (AirPrint, port 80)
+#   http://10.0.0.23:631/ipp/print     (CUPS-port on printer)
+#   ipp://10.0.0.23/ipp/print          (native IPP scheme)
+CONF_DIRECT_PRINTER_URL = "direct_printer_url"
+
 # ---------------------------------------------------------------------------
 # Options-flow keys — editable after setup via "Configure"
 # ---------------------------------------------------------------------------

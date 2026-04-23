@@ -81,13 +81,32 @@ Configure the built-in IMAP integration first (see [Prerequisites](#1-ha-imap-in
 
 > Settings → Devices & Services → Add Integration → **Auto Print**
 
-The setup wizard **auto-discovers CUPS** at common addresses and lists any IMAP accounts already configured in HA, so most fields are pre-populated.
+The setup wizard auto-discovers both **CUPS** and **direct IPP printers** at common addresses and lists any IMAP accounts already configured in HA.
+
+#### Option A — Direct IPP (no CUPS required)
+
+For any AirPrint / IPP-capable printer on your network (including most Canon PIXMA with AirPrint), you can print directly without CUPS:
+
+| Field | Example |
+|---|---|
+| Direct IPP Printer URL | `http://10.0.0.23/ipp/print` or `ipp://10.0.0.23/ipp/print` |
+
+The integration sends an IPP `Print-Job` packet containing a PDF directly to the printer. No conversion layer is needed — modern AirPrint printers accept PDF natively. Leave the CUPS fields empty.
+
+#### Option B — Via CUPS
 
 | Field | Example | Description |
 |---|---|---|
 | CUPS Base URL | `http://10.0.0.23:631` | Auto-filled if CUPS is found; edit if on a different host |
 | Printer Name | `Canon_MG3600_series` | Select from discovered printers, or choose **Enter name manually…** |
-| Pre-fill Senders from | `print@example.com (imap.example.com)` | Optional — pre-loads the IMAP account's address into Allowed Senders |
+
+Use CUPS when: the printer is USB-attached, needs driver/raster conversion, or you want a managed print queue.
+
+#### Common to both modes
+
+| Field | Description |
+|---|---|
+| Pre-fill Senders from | Optional — pre-loads an IMAP account's address into Allowed Senders |
 
 ### Options (editable any time)
 
@@ -327,6 +346,12 @@ A: Configure **Email Action after Printing** in Options: **Mark as read** keeps 
 
 **Q: How do I get notified when a print job fails?**  
 A: **Notify when print fails** is enabled by default. A HA persistent notification will appear in the bell (🔔) menu with the filename and error. Enable **Notify when print succeeds** if you also want confirmation of successful prints.
+
+**Q: Do I need CUPS at all?**  
+A: Not for modern AirPrint printers. If your printer has an IPP endpoint (most WiFi printers made after ~2015 do), use **Direct IPP mode** with a URL like `http://10.0.0.23/ipp/print`. CUPS is useful when the printer is USB-attached, needs format conversion (PCL/PostScript), or you want a managed queue.
+
+**Q: How do I find my printer's IPP URL?**  
+A: Common paths: `http://printer-ip/ipp/print`, `http://printer-ip:631/ipp/print`. Your router's device list shows the printer's IP. For Canon PIXMA: the embedded server is usually at port 80 with path `/ipp/print`.
 
 **Q: CUPS is on a different host. What URL do I use?**  
 A: `http://<cups-host-ip>:631`. When using the CUPS add-on on HA OS with host networking, the host IP is your HA LAN address.

@@ -3,15 +3,17 @@
     "step": {
       "user": {
         "title": "Printer Setup",
-        "description": "{cups_info}\n\n{imap_info}",
+        "description": "{direct_info}\n\n{cups_info}\n\n{imap_info}",
         "data": {
+          "direct_printer_url": "Direct IPP Printer URL (optional, bypasses CUPS)",
           "cups_url": "CUPS Base URL",
-          "printer_name": "Printer",
+          "printer_name": "Printer (CUPS queue)",
           "imap_account": "Pre-fill Allowed Senders from IMAP Account"
         },
         "data_description": {
-          "cups_url": "Base URL of your CUPS server. Discovered value is pre-filled — change if your CUPS is on a different host.",
-          "printer_name": "Select a discovered printer queue, or choose 'Enter name manually…' to type it.",
+          "direct_printer_url": "For AirPrint / IPP-capable printers: enter the printer's IPP endpoint directly (e.g. http://10.0.0.23/ipp/print or ipp://10.0.0.23/ipp/print). Leave empty to use CUPS below.",
+          "cups_url": "Base URL of your CUPS server. Ignored when a Direct IPP URL is set above.",
+          "printer_name": "Select a discovered printer queue, or choose 'Enter name manually…'. Ignored when Direct IPP URL is set.",
           "imap_account": "Select an IMAP account to automatically add its address to Allowed Senders. You can change this later in Options."
         }
       },

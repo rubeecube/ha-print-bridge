@@ -2,6 +2,15 @@
 
 All functions are pure (no I/O, no HA dependencies).  Network I/O is handled
 by the coordinator using aiohttp.
+
+Two printing modes are supported:
+
+  CUPS mode  — POST to http://cups-host:631/printers/<queue-name>
+               printer-uri attribute = ipp://cups-host:631/printers/<queue-name>
+
+  Direct IPP — POST to http://printer-ip/ipp/print  (or :631/ipp/print)
+               printer-uri attribute = ipp://printer-ip/ipp/print
+               Works with any AirPrint / IPP-capable printer without CUPS.
 """
 
 from __future__ import annotations
@@ -39,17 +48,56 @@ def _encode_attr(tag: int, name: str, value: str) -> bytes:
     )
 
 
-def build_ipp_packet(printer_name: str, file_name: str, sides: str, pdf_data: bytes) -> bytes:
+def http_url_to_ipp_uri(http_url: str) -> str:
+    """Convert an http(s) endpoint URL to its ipp(s) equivalent.
+
+    ``http://host:631/ipp/print`` → ``ipp://host:631/ipp/print``
+
+    The IPP ``printer-uri`` attribute must use the ``ipp://`` or ``ipps://``
+    scheme even when the transport uses plain HTTP/HTTPS.
+    """
+    url = http_url.strip()
+    if url.startswith("ipp://") or url.startswith("ipps://"):
+        return url
+    if url.startswith("https://"):
+        return "ipps://" + url[len("https://"):]
+    if url.startswith("http://"):
+        return "ipp://" + url[len("http://"):]
+    return url  # already correct or unknown scheme
+
+
+def cups_printer_uri(cups_base_url: str, queue_name: str) -> str:
+    """Return the correct IPP ``printer-uri`` for a CUPS queue.
+
+    ``http://10.0.0.23:631``, ``Canon_MG3600_series``
+    → ``ipp://10.0.0.23:631/printers/Canon_MG3600_series``
+    """
+    base = cups_base_url.rstrip("/")
+    # Strip the http/https scheme and re-add as ipp/ipps
+    if base.startswith("http://"):
+        ipp_base = "ipp://" + base[len("http://"):]
+    elif base.startswith("https://"):
+        ipp_base = "ipps://" + base[len("https://"):]
+    else:
+        ipp_base = base
+    return f"{ipp_base}/printers/{queue_name}"
+
+
+def build_ipp_packet(
+    printer_uri: str, file_name: str, sides: str, pdf_data: bytes
+) -> bytes:
     """Construct a valid IPP 2.0 Print-Job request packet.
 
     Args:
-        printer_name: CUPS queue name, used to build the printer-uri attribute.
+        printer_uri:  The full IPP ``printer-uri`` value, e.g.
+                      ``ipp://10.0.0.23:631/printers/Canon_MG3600_series``
+                      or ``ipp://10.0.0.23/ipp/print``.
         file_name:    Display name for the job (the PDF's filename).
         sides:        IPP sides keyword, e.g. "two-sided-long-edge".
         pdf_data:     Raw bytes of the PDF file (appended after the IPP header).
 
     Returns:
-        Complete IPP request bytes ready to POST to the CUPS printer endpoint.
+        Complete IPP request bytes ready to POST to the printer/CUPS endpoint.
     """
     # IPP/2.0 header: version(2B) + Print-Job op-id(2B) + request-id(4B)
     header = struct.pack(">HHI", 0x0200, 0x0002, 0x00000001)
@@ -57,9 +105,7 @@ def build_ipp_packet(printer_name: str, file_name: str, sides: str, pdf_data: by
     header += _GROUP_OPERATION
     header += _encode_attr(_TAG_CHARSET, "attributes-charset", "utf-8")
     header += _encode_attr(_TAG_NAT_LANG, "attributes-natural-language", "en")
-    header += _encode_attr(
-        _TAG_URI, "printer-uri", f"ipp://localhost/printers/{printer_name}"
-    )
+    header += _encode_attr(_TAG_URI, "printer-uri", printer_uri)
     header += _encode_attr(_TAG_NAME, "job-name", file_name)
     header += _encode_attr(_TAG_MIME, "document-format", "application/pdf")
 
@@ -72,11 +118,7 @@ def build_ipp_packet(printer_name: str, file_name: str, sides: str, pdf_data: by
 
 
 def determine_sides(duplex_mode: str, is_booklet: bool) -> str:
-    """Return the IPP ``sides`` keyword for the given duplex mode and booklet flag.
-
-    Booklet jobs are always printed two-sided on the short edge so the pages
-    fold correctly.
-    """
+    """Return the IPP ``sides`` keyword for the given duplex mode and booklet flag."""
     if is_booklet:
         return "two-sided-short-edge"
     return duplex_mode

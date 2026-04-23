@@ -31,6 +31,7 @@ from .const import (
     CONF_AUTO_DELETE,
     CONF_BOOKLET_PATTERNS,
     CONF_CUPS_URL,
+    CONF_DIRECT_PRINTER_URL,
     CONF_DUPLEX_MODE,
     CONF_EMAIL_ACTION,
     CONF_EMAIL_ARCHIVE_FOLDER,
@@ -50,7 +51,13 @@ from .const import (
     EVENT_JOB_COMPLETED,
 )
 from .imap_checker import EmailPreview, preview_mailbox
-from .print_handler import build_ipp_packet, determine_sides, is_booklet_job
+from .print_handler import (
+    build_ipp_packet,
+    cups_printer_uri,
+    determine_sides,
+    http_url_to_ipp_uri,
+    is_booklet_job,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,15 +124,41 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
     @property
     def _cups_url(self) -> str:
-        return self._entry.data[CONF_CUPS_URL].rstrip("/")
+        return self._entry.data.get(CONF_CUPS_URL, "").rstrip("/")
 
     @property
     def _printer_name(self) -> str:
-        return self._entry.data[CONF_PRINTER_NAME]
+        return self._entry.data.get(CONF_PRINTER_NAME, "")
+
+    @property
+    def _direct_printer_url(self) -> str:
+        """Return the direct IPP URL if configured (empty string = CUPS mode)."""
+        return self._entry.data.get(CONF_DIRECT_PRINTER_URL, "").strip()
+
+    @property
+    def _is_direct_mode(self) -> bool:
+        """True when printing directly to the printer without CUPS."""
+        return bool(self._direct_printer_url)
 
     @property
     def _ipp_endpoint(self) -> str:
+        """HTTP(S) URL to POST the IPP Print-Job request to."""
+        if self._is_direct_mode:
+            url = self._direct_printer_url
+            # Normalise ipp:// → http:// for the aiohttp POST call
+            if url.startswith("ipp://"):
+                return "http://" + url[len("ipp://"):]
+            if url.startswith("ipps://"):
+                return "https://" + url[len("ipps://"):]
+            return url
         return f"{self._cups_url}/printers/{self._printer_name}"
+
+    @property
+    def _printer_uri(self) -> str:
+        """IPP printer-uri attribute value for the Print-Job request."""
+        if self._is_direct_mode:
+            return http_url_to_ipp_uri(self._direct_printer_url)
+        return cups_printer_uri(self._cups_url, self._printer_name)
 
     @property
     def _duplex_mode(self) -> str:
@@ -505,7 +538,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 )
 
         sides = determine_sides(duplex_mode, booklet)
-        packet = build_ipp_packet(self._printer_name, filename, sides, pdf_data)
+        packet = build_ipp_packet(self._printer_uri, filename, sides, pdf_data)
 
         session = async_get_clientsession(self.hass)
         try:
@@ -562,10 +595,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     # ------------------------------------------------------------------
 
     async def _async_check_printer_online(self) -> bool:
+        """Return True if the printer or CUPS server is reachable."""
+        check_url = self._ipp_endpoint if self._is_direct_mode else self._cups_url
         session = async_get_clientsession(self.hass)
         try:
             async with session.head(
-                self._cups_url, timeout=aiohttp.ClientTimeout(total=5)
+                check_url, timeout=aiohttp.ClientTimeout(total=5)
             ) as resp:
                 return resp.status < 500
         except Exception:
