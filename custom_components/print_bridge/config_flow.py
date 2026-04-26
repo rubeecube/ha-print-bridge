@@ -12,7 +12,6 @@ import asyncio
 import logging
 import re as _re
 import socket
-import urllib.parse
 from typing import Any
 
 import aiohttp
@@ -20,7 +19,9 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import TemplateError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.template import Template
 
 from .const import (
     CONF_ALLOWED_SENDERS,
@@ -38,8 +39,10 @@ from .const import (
     CONF_QUEUE_FOLDER,
     CONF_AUTO_PRINT_ENABLED,
     CONF_SCHEDULE_ENABLED,
+    CONF_SCHEDULE_DAYS,
     CONF_SCHEDULE_END,
     CONF_SCHEDULE_START,
+    CONF_SCHEDULE_TEMPLATE,
     DEFAULT_AUTO_DELETE,
     DEFAULT_CUPS_URL,
     DEFAULT_DUPLEX_MODE,
@@ -50,17 +53,80 @@ from .const import (
     DEFAULT_QUEUE_FOLDER,
     DEFAULT_AUTO_PRINT_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
+    DEFAULT_SCHEDULE_DAYS,
     DEFAULT_SCHEDULE_END,
     DEFAULT_SCHEDULE_START,
+    DEFAULT_SCHEDULE_TEMPLATE,
     DOMAIN,
     DUPLEX_MODES,
     EMAIL_ACTIONS,
+    SCHEDULE_DAYS,
 )
 from .print_handler import http_url_to_ipp_uri
 
 _HHMM_PATTERN = _re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_SCHEDULE_DAY_ALIASES = {
+    "mon": "mon",
+    "monday": "mon",
+    "1": "mon",
+    "tue": "tue",
+    "tues": "tue",
+    "tuesday": "tue",
+    "2": "tue",
+    "wed": "wed",
+    "wednesday": "wed",
+    "3": "wed",
+    "thu": "thu",
+    "thur": "thu",
+    "thurs": "thu",
+    "thursday": "thu",
+    "4": "thu",
+    "fri": "fri",
+    "friday": "fri",
+    "5": "fri",
+    "sat": "sat",
+    "saturday": "sat",
+    "6": "sat",
+    "sun": "sun",
+    "sunday": "sun",
+    "7": "sun",
+}
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_schedule_days(value: Any) -> list[str] | None:
+    """Parse user-entered weekday names into canonical tokens."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_days = [
+            part.strip().lower()
+            for part in _re.split(r"[\s,;]+", value)
+            if part.strip()
+        ]
+    elif isinstance(value, (list, tuple, set)):
+        raw_days = [str(day).strip().lower() for day in value if str(day).strip()]
+    else:
+        return None
+
+    days: list[str] = []
+    for raw_day in raw_days:
+        day = _SCHEDULE_DAY_ALIASES.get(raw_day)
+        if day is None:
+            return None
+        if day not in days:
+            days.append(day)
+    return days
+
+
+def _schedule_days_to_text(value: Any) -> str:
+    """Format stored weekday tokens for the options form."""
+    days = _parse_schedule_days(value)
+    if days is None:
+        return ""
+    return "\n".join(day for day in SCHEDULE_DAYS if day in days)
+
 
 # Sentinel option values used in select fields
 _SENTINEL_MANUAL = "__manual__"    # user wants to type the printer name
@@ -340,9 +406,7 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors[CONF_DIRECT_PRINTER_URL] = "unknown"
 
                 if not errors:
-                    parsed = urllib.parse.urlparse(direct_url)
-                    display = parsed.hostname or direct_url
-                    return await self._create_direct(direct_url, display, imap_sel)
+                    return await self._create_direct(direct_url, imap_sel)
 
             elif cups_url and printer_raw:
                 # CUPS mode: user provided both URL and printer name.
@@ -425,7 +489,7 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
             errors["base"] = "unknown"
 
     async def _create_direct(
-        self, direct_url: str, display_name: str, imap_sel: str
+        self, direct_url: str, imap_sel: str
     ) -> ConfigFlowResult:
         """Create a config entry for direct IPP mode (no CUPS)."""
         initial_options: dict[str, Any] = {CONF_AUTO_PRINT_ENABLED: False}  # disabled until user configures
@@ -437,7 +501,7 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         return self.async_create_entry(
-            title=f"Print Bridge (direct) — {display_name}",
+            title="Print Bridge — Direct Printer",
             data={CONF_DIRECT_PRINTER_URL: direct_url},
             options=initial_options,
         )
@@ -505,11 +569,26 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 for f in user_input.get(CONF_FOLDER_FILTER, "").splitlines()
                 if f.strip()
             ]
+            schedule_days = _parse_schedule_days(
+                user_input.get(CONF_SCHEDULE_DAYS, "")
+            )
+            schedule_template = str(
+                user_input.get(CONF_SCHEDULE_TEMPLATE, "") or ""
+            ).strip()
 
             for time_key in (CONF_SCHEDULE_START, CONF_SCHEDULE_END):
                 val = user_input.get(time_key, "")
                 if val and not _HHMM_PATTERN.match(val):
                     errors[time_key] = "invalid_time_format"
+
+            if schedule_days is None:
+                errors[CONF_SCHEDULE_DAYS] = "invalid_schedule_days"
+
+            if schedule_template:
+                try:
+                    Template(schedule_template, self.hass).ensure_valid()
+                except TemplateError:
+                    errors[CONF_SCHEDULE_TEMPLATE] = "invalid_template"
 
             if not errors:
                 return self.async_create_entry(
@@ -519,12 +598,17 @@ class AutoPrintOptionsFlow(OptionsFlow):
                         CONF_BOOKLET_PATTERNS: patterns,
                         CONF_ALLOWED_SENDERS: senders,
                         CONF_FOLDER_FILTER: folders,
+                        CONF_SCHEDULE_DAYS: schedule_days or [],
+                        CONF_SCHEDULE_TEMPLATE: schedule_template,
                     },
                 )
 
         current_patterns = options.get(CONF_BOOKLET_PATTERNS, [])
         current_senders = options.get(CONF_ALLOWED_SENDERS, [])
         current_folders = options.get(CONF_FOLDER_FILTER, [])
+        current_schedule_days = _schedule_days_to_text(
+            options.get(CONF_SCHEDULE_DAYS, DEFAULT_SCHEDULE_DAYS)
+        )
 
         imap_folder_hint = ", ".join(
             f"{e.data.get('folder', 'INBOX')} ({e.data.get('username', e.title)})"
@@ -592,6 +676,14 @@ class AutoPrintOptionsFlow(OptionsFlow):
             vol.Optional(
                 CONF_SCHEDULE_END,
                 default=options.get(CONF_SCHEDULE_END, DEFAULT_SCHEDULE_END),
+            ): str,
+            vol.Optional(
+                CONF_SCHEDULE_DAYS,
+                default=current_schedule_days,
+            ): str,
+            vol.Optional(
+                CONF_SCHEDULE_TEMPLATE,
+                default=options.get(CONF_SCHEDULE_TEMPLATE, DEFAULT_SCHEDULE_TEMPLATE),
             ): str,
         })
 

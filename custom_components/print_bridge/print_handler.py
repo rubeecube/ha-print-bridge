@@ -90,8 +90,8 @@ def http_url_to_ipp_uri(http_url: str) -> str:
 def cups_printer_uri(cups_base_url: str, queue_name: str) -> str:
     """Return the correct IPP ``printer-uri`` for a CUPS queue.
 
-    ``http://10.0.0.23:631``, ``Canon_MG3600_series``
-    → ``ipp://10.0.0.23:631/printers/Canon_MG3600_series``
+    ``http://cups.local:631``, ``Canon_MG3600_series``
+    → ``ipp://cups.local:631/printers/Canon_MG3600_series``
     """
     base = cups_base_url.rstrip("/")
     # Strip the http/https scheme and re-add as ipp/ipps
@@ -111,8 +111,8 @@ def build_ipp_packet(
 
     Args:
         printer_uri:  The full IPP ``printer-uri`` value, e.g.
-                      ``ipp://10.0.0.23:631/printers/Canon_MG3600_series``
-                      or ``ipp://10.0.0.23/ipp/print``.
+                      ``ipp://cups.local:631/printers/Canon_MG3600_series``
+                      or ``ipp://printer.local/ipp/print``.
         file_name:    Display name for the job (the PDF's filename).
         sides:        IPP sides keyword, e.g. "two-sided-long-edge".
         pdf_data:     Raw bytes of the PDF file (appended after the IPP header).

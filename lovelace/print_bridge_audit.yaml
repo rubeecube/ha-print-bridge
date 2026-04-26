@@ -33,6 +33,36 @@ cards:
       |:-------:|:--------:|:-----:|:---------:|:----------:|
       | {{ '🟢 Online' if online and online.state == 'on' else ('🔴 Offline' if online else '❓ Unknown') }} | {{ ('✅ ' if last and last.state == 'success' else ('❌ ' if last else '')) ~ (last.state if last else '—') }} | {{ queue.state if queue else '—' }} | {{ sched.state if sched else '—' }} | {{ jobs.state if jobs else '—' }} |
 
+  # ── Component configuration ───────────────────────────────────────────────
+  - type: entities
+    title: Configuration
+    show_header_toggle: false
+    entities:
+      - switch.print_bridge_YOUR_SLUG_auto_print
+      - select.print_bridge_YOUR_SLUG_imap_account
+      - select.print_bridge_YOUR_SLUG_target_printer
+      - select.print_bridge_YOUR_SLUG_default_duplex_mode
+      - text.print_bridge_YOUR_SLUG_allowed_senders
+      - text.print_bridge_YOUR_SLUG_folder_filter
+      - text.print_bridge_YOUR_SLUG_booklet_patterns
+      - type: section
+        label: Files and mailbox cleanup
+      - switch.print_bridge_YOUR_SLUG_delete_after_printing
+      - text.print_bridge_YOUR_SLUG_queue_folder
+      - select.print_bridge_YOUR_SLUG_email_action_after_print
+      - text.print_bridge_YOUR_SLUG_email_archive_folder
+      - type: section
+        label: Notifications
+      - switch.print_bridge_YOUR_SLUG_notify_on_failure
+      - switch.print_bridge_YOUR_SLUG_notify_on_success
+      - type: section
+        label: Schedule
+      - switch.print_bridge_YOUR_SLUG_print_schedule
+      - text.print_bridge_YOUR_SLUG_schedule_start
+      - text.print_bridge_YOUR_SLUG_schedule_end
+      - text.print_bridge_YOUR_SLUG_schedule_days
+      - text.print_bridge_YOUR_SLUG_schedule_template
+
   # ── Action grid ────────────────────────────────────────────────────────────
   - type: grid
     square: false
@@ -92,15 +122,67 @@ cards:
       **Scanned:** {{ checked }}  ·  **Account:** {{ state_attr(s.entity_id, 'imap_account') }}
       **{{ state_attr(s.entity_id, 'total_found') }}** found  ·  **{{ state_attr(s.entity_id, 'matching_filter') }}** match filter  ·  **{{ state_attr(s.entity_id, 'with_pdf') }}** have PDF
 
-      | UID | Subject | From | PDF | How to print |
-      |-----|---------|------|:---:|-------------|
-      {% for e in preview | selectattr('has_pdf') %}
-      | `{{ e.uid }}` | {{ e.subject | truncate(28) }} | {{ e.sender | truncate(20) }} | 📄×{{ e.pdf_count }} | Service: `print_bridge.print_email` uid={{ e.uid }} |
+      {% set printable = preview | selectattr('has_pdf') | selectattr('matches_filter') | list %}
+      | UID | Subject | From | PDF |
+      |-----|---------|------|:---:|
+      {% for e in printable[:5] %}
+      | `{{ e.uid }}` | {{ e.subject | truncate(36) }} | {{ e.sender | truncate(24) }} | 📄×{{ e.pdf_count }} |
       {% else %}
-      | — | No emails with PDF found | | | |
+      | — | No emails with PDF found | | |
       {% endfor %}
       {% endif %}
       {% endif %}
+
+  # ── One-press print buttons for the last 5 matching emails ───────────────
+  - type: grid
+    title: Last 5 Mail Prints
+    square: false
+    columns: 1
+    cards:
+      - type: button
+        entity: button.print_bridge_YOUR_SLUG_print_email_1
+        show_state: false
+        tap_action:
+          action: call-service
+          service: button.press
+          target:
+            entity_id: button.print_bridge_YOUR_SLUG_print_email_1
+
+      - type: button
+        entity: button.print_bridge_YOUR_SLUG_print_email_2
+        show_state: false
+        tap_action:
+          action: call-service
+          service: button.press
+          target:
+            entity_id: button.print_bridge_YOUR_SLUG_print_email_2
+
+      - type: button
+        entity: button.print_bridge_YOUR_SLUG_print_email_3
+        show_state: false
+        tap_action:
+          action: call-service
+          service: button.press
+          target:
+            entity_id: button.print_bridge_YOUR_SLUG_print_email_3
+
+      - type: button
+        entity: button.print_bridge_YOUR_SLUG_print_email_4
+        show_state: false
+        tap_action:
+          action: call-service
+          service: button.press
+          target:
+            entity_id: button.print_bridge_YOUR_SLUG_print_email_4
+
+      - type: button
+        entity: button.print_bridge_YOUR_SLUG_print_email_5
+        show_state: false
+        tap_action:
+          action: call-service
+          service: button.press
+          target:
+            entity_id: button.print_bridge_YOUR_SLUG_print_email_5
 
   # ── Recent print jobs (auto-detected, no slug) ────────────────────────────
   - type: markdown

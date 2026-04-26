@@ -26,7 +26,7 @@ from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_cups_session
 
 # Inputs that work for any form variant (no IMAP entry in HA by default).
 _USER_INPUT = {
-    "cups_url": "http://10.0.0.1:631",
+    "cups_url": "http://cups.local:631",
     "printer_name": "TestPrinter",
 }
 
@@ -85,7 +85,7 @@ def _mock_mdns_discovery(printers: list | None = None):
     stack.enter_context(patch(
         "custom_components.print_bridge.config_flow._discover_printers_mdns",
         new=AsyncMock(return_value=printers or [
-            {"name": "MyPrinter", "url": "http://192.168.1.10/ipp/print"}
+            {"name": "MyPrinter", "url": "http://printer.local/ipp/print"}
         ]),
     ))
     return stack
@@ -102,7 +102,7 @@ async def test_full_flow_cups_discovered(
 ) -> None:
     """When CUPS is discovered, CUPS fields appear and the entry is created."""
     # Use _mock_discovery so cups_url is not None → CUPS fields shown in form.
-    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
+    with _mock_discovery("http://cups.local:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -113,7 +113,7 @@ async def test_full_flow_cups_discovered(
         result["flow_id"], _USER_INPUT
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"]["cups_url"] == "http://10.0.0.1:631"
+    assert result["data"]["cups_url"] == "http://cups.local:631"
     assert result["data"]["printer_name"] == "TestPrinter"
     mock_setup_entry.assert_called_once()
 
@@ -157,7 +157,7 @@ async def test_entry_title_contains_printer_name(
     mock_cups_ok,
     mock_setup_entry,
 ) -> None:
-    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
+    with _mock_discovery("http://cups.local:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -238,7 +238,7 @@ async def test_imap_account_pre_fills_allowed_senders(
     imap_entry.add_to_hass(hass)
 
     # Use _mock_discovery so CUPS fields appear in schema.
-    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
+    with _mock_discovery("http://cups.local:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -246,7 +246,7 @@ async def test_imap_account_pre_fills_allowed_senders(
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
-            "cups_url": "http://10.0.0.1:631",
+            "cups_url": "http://cups.local:631",
             "printer_name": "TestPrinter",
             "imap_account": imap_entry.entry_id,
         },
@@ -269,7 +269,7 @@ async def test_skip_imap_creates_empty_allowed_senders(
     imap_entry.add_to_hass(hass)
 
     # Use _mock_discovery so CUPS fields appear in schema.
-    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
+    with _mock_discovery("http://cups.local:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -293,7 +293,7 @@ async def test_cups_unreachable_shows_error_then_recovers(
     import aiohttp as _aiohttp
 
     # Need CUPS "found" so CUPS fields appear in schema.
-    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
+    with _mock_discovery("http://cups.local:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -345,7 +345,7 @@ async def test_mdns_discovery_pre_fills_direct_url(
     mock_setup_entry,
 ) -> None:
     """When mDNS finds a printer, its URL should be available in the dropdown."""
-    with _mock_mdns_discovery([{"name": "CanonMG", "url": "http://192.168.1.10/ipp/print"}]):
+    with _mock_mdns_discovery([{"name": "CanonMG", "url": "http://canonmg.local/ipp/print"}]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -386,7 +386,7 @@ async def test_duplicate_entry_aborted(
     mock_setup_entry,
 ) -> None:
     # Must use _mock_discovery so CUPS fields are present in schema.
-    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
+    with _mock_discovery("http://cups.local:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -395,7 +395,7 @@ async def test_duplicate_entry_aborted(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
-    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
+    with _mock_discovery("http://cups.local:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -430,6 +430,11 @@ async def test_options_flow_persists_all_fields(
         "booklet_patterns": "Programme\nBulletin",
         "auto_delete": False,
         "queue_folder": "/tmp/q2",
+        "schedule_enabled": True,
+        "schedule_start": "09:00",
+        "schedule_end": "17:30",
+        "schedule_days": "mon\nwednesday\n5",
+        "schedule_template": "{{ true }}",
     }
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], new_input
@@ -439,6 +444,11 @@ async def test_options_flow_persists_all_fields(
     assert entry.options["booklet_patterns"] == ["Programme", "Bulletin"]
     assert entry.options["duplex_mode"] == "one-sided"
     assert entry.options["auto_delete"] is False
+    assert entry.options["schedule_enabled"] is True
+    assert entry.options["schedule_start"] == "09:00"
+    assert entry.options["schedule_end"] == "17:30"
+    assert entry.options["schedule_days"] == ["mon", "wed", "fri"]
+    assert entry.options["schedule_template"] == "{{ true }}"
 
 
 async def test_options_flow_imap_shortcut_appends_sender(
@@ -505,6 +515,60 @@ async def test_options_flow_empty_senders_means_accept_all(
     assert entry.options["allowed_senders"] == []
 
 
+async def test_options_flow_rejects_invalid_schedule_days(
+    hass: HomeAssistant,
+    mock_coordinator_update,
+) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "allowed_senders": "sender@example.com",
+            "duplex_mode": "two-sided-long-edge",
+            "booklet_patterns": "",
+            "auto_delete": True,
+            "queue_folder": "/tmp/q",
+            "schedule_days": "monday\nfunday",
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["schedule_days"] == "invalid_schedule_days"
+
+
+async def test_options_flow_rejects_invalid_schedule_template(
+    hass: HomeAssistant,
+    mock_coordinator_update,
+) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "allowed_senders": "sender@example.com",
+            "duplex_mode": "two-sided-long-edge",
+            "booklet_patterns": "",
+            "auto_delete": True,
+            "queue_folder": "/tmp/q",
+            "schedule_template": "{% if %}",
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["schedule_template"] == "invalid_template"
+
+
 # ---------------------------------------------------------------------------
 # Direct IPP mode — no CUPS required
 # ---------------------------------------------------------------------------
@@ -520,7 +584,7 @@ async def test_direct_ipp_flow_creates_entry(
         )
 
     # Supply a direct IPP URL — no CUPS fields in schema when CUPS not found.
-    direct_url = "http://192.168.1.100/ipp/print"
+    direct_url = "http://direct-printer.local/ipp/print"
     with patch(
         "custom_components.print_bridge.config_flow.async_get_clientsession",
         return_value=_make_cups_session(200),
@@ -535,4 +599,4 @@ async def test_direct_ipp_flow_creates_entry(
     # CUPS fields must NOT be stored when direct mode is used.
     assert "printer_name" not in result["data"]
     assert "cups_url" not in result["data"]
-    assert "direct" in result["title"].lower() or "192.168.1.100" in result["title"]
+    assert result["title"] == "Print Bridge — Direct Printer"

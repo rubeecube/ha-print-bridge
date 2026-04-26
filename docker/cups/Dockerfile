@@ -21,7 +21,7 @@ RUN apt-get update \
 
 # Allow CUPS to accept connections from any host (needed for Docker networking).
 RUN sed -i \
-      -e 's|^Listen localhost:631|Listen 0.0.0.0:631|' \
+      -e 's|^Listen localhost:631|Port 631|' \
       -e 's|^#ServerName.*|ServerName cups|' \
       /etc/cups/cupsd.conf \
  && printf '\n<Location />\n  Order allow,deny\n  Allow all\n</Location>\n\n<Location /admin>\n  Order allow,deny\n  Allow all\n</Location>\n' \

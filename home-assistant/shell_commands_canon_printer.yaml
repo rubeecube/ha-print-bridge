@@ -2,32 +2,32 @@
 #   shell_command: !include home-assistant/shell_commands_canon_printer.yaml
 # (adjust path to where you copy this file under /config)
 #
-# Printer IP — change if your DHCP reservation changes.
+# Printer host — replace printer.local with your printer hostname if needed.
 # On HA OS, `lp` / `lpstat` are often missing; those entries still report clearly.
 
-canon_printer_status_ping: "ping -c 2 -W 3 10.0.0.23"
+canon_printer_status_ping: "ping -c 2 -W 3 printer.local"
 
 canon_printer_status: >-
-  ping -c 1 -W 2 10.0.0.23 >/dev/null 2>&1
-  && echo "10.0.0.23 reachable"
-  || echo "10.0.0.23 not reachable"
+  ping -c 1 -W 2 printer.local >/dev/null 2>&1
+  && echo "printer.local reachable"
+  || echo "printer.local not reachable"
 
 canon_printer_ports: >-
   echo -n "ping: ";
-  ping -c 1 -W 2 10.0.0.23 >/dev/null 2>&1 && echo ok || echo fail;
+  ping -c 1 -W 2 printer.local >/dev/null 2>&1 && echo ok || echo fail;
   echo -n "tcp631: ";
-  (command -v nc >/dev/null 2>&1 && nc -z -w 2 10.0.0.23 631 && echo open || echo closed_or_no_nc) || echo skip
+  (command -v nc >/dev/null 2>&1 && nc -z -w 2 printer.local 631 && echo open || echo closed_or_no_nc) || echo skip
 
 # Many embedded print servers reset after "100 Continue" if curl sends Expect:
 # 100-continue. Empty "Expect:" disables that (see curl -H "Expect:").
 canon_printer_curl_631_headers: >-
-  curl -sS -m 8 -H "Expect:" -D - -o /dev/null http://10.0.0.23:631/ 2>&1 | head -n 25
+  curl -sS -m 8 -H "Expect:" -D - -o /dev/null http://printer.local:631/ 2>&1 | head -n 25
 
 canon_printer_curl_ipp_print_headers: >-
-  curl -sS -m 8 -H "Expect:" -D - -o /dev/null http://10.0.0.23:631/ipp/print 2>&1 | head -n 25
+  curl -sS -m 8 -H "Expect:" -D - -o /dev/null http://printer.local:631/ipp/print 2>&1 | head -n 25
 
 canon_printer_curl_631_head: >-
-  curl -sS -m 8 -H "Expect:" -I http://10.0.0.23:631/ 2>&1 | head -n 25
+  curl -sS -m 8 -H "Expect:" -I http://printer.local:631/ 2>&1 | head -n 25
 
 canon_printer_lp_probe: >-
   echo -n "lp: ";

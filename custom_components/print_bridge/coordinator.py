@@ -15,6 +15,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.utils import parseaddr
@@ -24,7 +25,9 @@ import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.exceptions import TemplateError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.template import Template
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .booklet_maker import create_booklet
@@ -43,9 +46,13 @@ from .const import (
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
     CONF_AUTO_PRINT_ENABLED,
+    CONF_SELECTED_IMAP_ENTRY_ID,
+    CONF_SELECTED_PRINTER_ENTRY_ID,
     CONF_SCHEDULE_ENABLED,
+    CONF_SCHEDULE_DAYS,
     CONF_SCHEDULE_END,
     CONF_SCHEDULE_START,
+    CONF_SCHEDULE_TEMPLATE,
     DEFAULT_AUTO_DELETE,
     DEFAULT_DUPLEX_MODE,
     DEFAULT_EMAIL_ACTION,
@@ -55,10 +62,13 @@ from .const import (
     DEFAULT_QUEUE_FOLDER,
     DEFAULT_AUTO_PRINT_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
+    DEFAULT_SCHEDULE_DAYS,
     DEFAULT_SCHEDULE_END,
     DEFAULT_SCHEDULE_START,
+    DEFAULT_SCHEDULE_TEMPLATE,
     DOMAIN,
     EVENT_JOB_COMPLETED,
+    SCHEDULE_DAYS,
 )
 from .imap_checker import EmailPreview, preview_mailbox
 from .print_handler import (
@@ -73,6 +83,33 @@ from .print_handler import (
 logger = logging.getLogger(__name__)
 
 _STATUS_INTERVAL = timedelta(minutes=5)
+_SCHEDULE_DAY_ALIASES = {
+    "mon": "mon",
+    "monday": "mon",
+    "1": "mon",
+    "tue": "tue",
+    "tues": "tue",
+    "tuesday": "tue",
+    "2": "tue",
+    "wed": "wed",
+    "wednesday": "wed",
+    "3": "wed",
+    "thu": "thu",
+    "thur": "thu",
+    "thurs": "thu",
+    "thursday": "thu",
+    "4": "thu",
+    "fri": "fri",
+    "friday": "fri",
+    "5": "fri",
+    "sat": "sat",
+    "saturday": "sat",
+    "6": "sat",
+    "sun": "sun",
+    "sunday": "sun",
+    "7": "sun",
+}
+_FALSE_TEMPLATE_VALUES = {"", "0", "false", "no", "off", "none", "unknown", "unavailable"}
 
 
 def _decode_mime_filename(value: str) -> str:
@@ -107,6 +144,39 @@ def _is_pdf_part(part_info: dict[str, Any]) -> bool:
     return content_type.split(";", 1)[0].strip().lower() == "application/pdf"
 
 
+def _normalise_schedule_days(value: Any) -> list[str]:
+    """Return canonical weekday tokens from stored options."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_days = _re_split_days(value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_days = [str(day).strip().lower() for day in value if str(day).strip()]
+    else:
+        return []
+
+    days: list[str] = []
+    for raw_day in raw_days:
+        day = _SCHEDULE_DAY_ALIASES.get(raw_day)
+        if day and day not in days:
+            days.append(day)
+    return days
+
+
+def _re_split_days(value: str) -> list[str]:
+    return [part.strip().lower() for part in re.split(r"[\s,;]+", value) if part.strip()]
+
+
+def _template_result_is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSE_TEMPLATE_VALUES
+    return bool(value)
+
+
 @dataclass
 class PrintJobResult:
     """Outcome of a single print attempt, including audit metadata."""
@@ -137,6 +207,7 @@ class FilterPreviewResult:
 
     checked_at: str
     imap_account: str               # username@server shown in the UI
+    imap_entry_id: str               # HA IMAP config entry used for fetch/print
     total_found: int                # total messages inspected
     matching: int                   # messages matching the sender filter
     with_pdf: int                   # matching messages that have a PDF attachment
@@ -289,22 +360,130 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     def _schedule_end(self) -> str:
         return self._entry.options.get(CONF_SCHEDULE_END, DEFAULT_SCHEDULE_END)
 
+    @property
+    def selected_imap_entry_id(self) -> str | None:
+        """Selected IMAP account for previews and on-demand email printing."""
+        imap_entries = self.hass.config_entries.async_entries("imap")
+        if not imap_entries:
+            return None
+        configured = self._entry.options.get(CONF_SELECTED_IMAP_ENTRY_ID)
+        if configured in {entry.entry_id for entry in imap_entries}:
+            return configured
+        return imap_entries[0].entry_id
+
+    @property
+    def selected_printer_entry_id(self) -> str:
+        """Selected Print Bridge entry used as the dashboard print target."""
+        print_entries = self.hass.config_entries.async_entries(DOMAIN)
+        configured = self._entry.options.get(CONF_SELECTED_PRINTER_ENTRY_ID)
+        if configured in {entry.entry_id for entry in print_entries}:
+            return configured
+        return self._entry.entry_id
+
+    @property
+    def selected_printer_coordinator(self) -> AutoPrintCoordinator:
+        """Coordinator for the selected target printer, or this one as fallback."""
+        selected_entry_id = self.selected_printer_entry_id
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.entry_id == selected_entry_id and entry.runtime_data is not None:
+                return entry.runtime_data  # type: ignore[return-value]
+        return self
+
+    def set_selected_imap_entry_id(self, entry_id: str) -> None:
+        """Persist the selected IMAP account for this Print Bridge entry."""
+        self.set_option(CONF_SELECTED_IMAP_ENTRY_ID, entry_id)
+
+    def set_selected_printer_entry_id(self, entry_id: str) -> None:
+        """Persist the selected target printer for this Print Bridge entry."""
+        self.set_option(CONF_SELECTED_PRINTER_ENTRY_ID, entry_id)
+
+    def set_option(self, key: str, value: Any) -> None:
+        """Persist one option and refresh coordinator-backed entities."""
+        options = dict(self._entry.options)
+        options[key] = value
+        self.hass.config_entries.async_update_entry(self._entry, options=options)
+        if self.data is not None:
+            self.async_set_updated_data(self.data)
+
+    @property
+    def _schedule_days(self) -> list[str]:
+        return _normalise_schedule_days(
+            self._entry.options.get(CONF_SCHEDULE_DAYS, DEFAULT_SCHEDULE_DAYS)
+        )
+
+    @property
+    def _schedule_template(self) -> str:
+        return str(
+            self._entry.options.get(CONF_SCHEDULE_TEMPLATE, DEFAULT_SCHEDULE_TEMPLATE)
+            or ""
+        ).strip()
+
+    def _schedule_template_allows_printing(
+        self, now: datetime, schedule_window_day: str
+    ) -> bool:
+        """Return True when the optional HA template renders truthy."""
+        template_text = self._schedule_template
+        if not template_text:
+            return True
+
+        weekday = SCHEDULE_DAYS[now.weekday()]
+        try:
+            rendered = Template(template_text, self.hass).async_render(
+                {
+                    "now": now,
+                    "schedule_time": now.time(),
+                    "schedule_weekday": weekday,
+                    "schedule_window_day": schedule_window_day,
+                    "schedule_days": self._schedule_days,
+                    "schedule_start": self._schedule_start,
+                    "schedule_end": self._schedule_end,
+                    "printer_name": self._printer_name,
+                },
+                parse_result=True,
+            )
+        except TemplateError as err:
+            logger.warning(
+                "Print schedule template failed; allowing job through: %s", err
+            )
+            return True
+        return _template_result_is_truthy(rendered)
+
     def _is_within_schedule(self) -> bool:
-        """Return True if the current local time is inside the print window."""
+        """Return True if local day, time, and template allow printing."""
         if not self._schedule_enabled:
             return True
+
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.now()
+        time_open = True
+        schedule_window_day = SCHEDULE_DAYS[now.weekday()]
         try:
-            from homeassistant.util import dt as dt_util
-            now = dt_util.now().time()
             start = datetime.strptime(self._schedule_start, "%H:%M").time()
             end = datetime.strptime(self._schedule_end, "%H:%M").time()
+            current_time = now.time()
+            if start <= end:
+                time_open = start <= current_time <= end
+            else:
+                # Window wraps midnight (e.g. 22:00 → 07:00)
+                if current_time >= start:
+                    time_open = True
+                elif current_time <= end:
+                    time_open = True
+                    schedule_window_day = SCHEDULE_DAYS[(now.weekday() - 1) % 7]
+                else:
+                    time_open = False
         except ValueError:
-            return True  # bad config → default to always allowed
+            time_open = True  # bad time config → leave time unrestricted
 
-        if start <= end:
-            return start <= now <= end
-        # Window wraps midnight (e.g. 22:00 → 07:00)
-        return now >= start or now <= end
+        if not time_open:
+            return False
+
+        schedule_days = self._schedule_days
+        if schedule_days and schedule_window_day not in schedule_days:
+            return False
+
+        return self._schedule_template_allows_printing(now, schedule_window_day)
 
     @property
     def _email_action(self) -> str:
@@ -712,6 +891,76 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         await self.async_request_refresh()
         return result
 
+    async def async_print_email(
+        self,
+        uid: str,
+        imap_entry_id: str | None = None,
+        duplex: str | None = None,
+        booklet: bool = False,
+    ) -> dict:
+        """Print all PDF attachments from one IMAP email by UID."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        if not imap_entry_id:
+            imap_entry_id = self.selected_imap_entry_id
+            if not imap_entry_id:
+                raise HomeAssistantError(
+                    "No IMAP integration configured. "
+                    "Add the HA IMAP integration first."
+                )
+
+        try:
+            fetch_result: dict = await self.hass.services.async_call(
+                "imap",
+                "fetch",
+                {"entry": imap_entry_id, "uid": uid},
+                blocking=True,
+                return_response=True,
+            )
+        except Exception as exc:
+            raise HomeAssistantError(
+                f"Failed to fetch email uid={uid}: {exc}"
+            ) from exc
+
+        parts: dict = fetch_result.get("parts", {})
+        pdf_parts = {
+            k: v for k, v in parts.items()
+            if _is_pdf_part(v)
+        }
+
+        if not pdf_parts:
+            raise HomeAssistantError(
+                f"No PDF attachments found in email uid={uid}. "
+                f"Available parts: {list(parts.keys())}"
+            )
+
+        results = []
+        for part_key, part_info in pdf_parts.items():
+            filename = (
+                part_info.get("filename")
+                or part_info.get("file_name")
+                or f"attachment_{part_key}.pdf"
+            )
+            result = await self.async_process_imap_part(
+                entry_id=imap_entry_id,
+                uid=uid,
+                part_key=part_key,
+                filename=filename,
+                duplex_override=duplex,
+                booklet_override=booklet or None,
+            )
+            results.append({
+                "filename": result.filename,
+                "success": result.success,
+                "error": result.error,
+            })
+
+        return {
+            "uid": uid,
+            "printed": len(results),
+            "results": results,
+        }
+
     async def async_check_filter(
         self, imap_entry_id: str | None = None
     ) -> FilterPreviewResult:
@@ -730,6 +979,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             )
 
         target = None
+        if imap_entry_id is None:
+            imap_entry_id = self.selected_imap_entry_id
+
         if imap_entry_id:
             for e in imap_entries:
                 if e.entry_id == imap_entry_id:
@@ -773,6 +1025,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         result = FilterPreviewResult(
             checked_at=datetime.now().isoformat(timespec="seconds"),
             imap_account=f"{username}@{server}",
+            imap_entry_id=target.entry_id,
             total_found=len(emails),
             matching=len(matching),
             with_pdf=len(with_pdf),

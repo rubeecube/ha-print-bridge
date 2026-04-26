@@ -46,7 +46,7 @@ services:
       - "3143:3143"   # IMAP — HA's IMAP integration connects here (plain)
       - "8080:8080"   # REST API — health check + mail inspection
     environment:
-      - GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=test:test@test.example.com
+      - GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.users=test:test@test.example.com
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/api/service/readiness"]
       interval: 5s

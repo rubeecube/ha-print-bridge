@@ -38,7 +38,7 @@ def _auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
 # ── shared entry data (CUPS-only — no IMAP fields) ────────────────────────────
 
 MOCK_CONFIG_DATA: dict = {
-    "cups_url": "http://10.0.0.1:631",
+    "cups_url": "http://cups.local:631",
     "printer_name": "TestPrinter",
 }
 

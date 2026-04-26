@@ -11,9 +11,9 @@ CONF_PRINTER_NAME = "printer_name"
 # Optional: direct IPP URL (bypasses CUPS entirely).
 # When set, the component sends Print-Job straight to the printer.
 # Examples:
-#   http://192.168.1.x/ipp/print         (AirPrint, port 80)
-#   http://192.168.1.x:631/ipp/print     (CUPS-port on printer)
-#   ipp://192.168.1.x/ipp/print          (native IPP scheme)
+#   http://printer.local/ipp/print       (AirPrint, port 80)
+#   http://printer.local:631/ipp/print   (CUPS-port on printer)
+#   ipp://printer.local/ipp/print        (native IPP scheme)
 CONF_DIRECT_PRINTER_URL = "direct_printer_url"
 
 # ---------------------------------------------------------------------------
@@ -32,7 +32,11 @@ CONF_NOTIFY_ON_SUCCESS = "notify_on_success"       # send HA notification when p
 CONF_SCHEDULE_ENABLED = "schedule_enabled"         # enable print time window
 CONF_SCHEDULE_START = "schedule_start"             # "HH:MM" — start of allowed window
 CONF_SCHEDULE_END = "schedule_end"                 # "HH:MM" — end of allowed window
+CONF_SCHEDULE_DAYS = "schedule_days"               # list[str]; empty = every day
+CONF_SCHEDULE_TEMPLATE = "schedule_template"       # HA template; truthy = allow printing
 CONF_AUTO_PRINT_ENABLED = "auto_print_enabled"     # automatically print on imap_content event
+CONF_SELECTED_IMAP_ENTRY_ID = "selected_imap_entry_id"
+CONF_SELECTED_PRINTER_ENTRY_ID = "selected_printer_entry_id"
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -49,6 +53,10 @@ DEFAULT_SCHEDULE_ENABLED = False
 DEFAULT_AUTO_PRINT_ENABLED = True  # enabled by default; set False on first install
 DEFAULT_SCHEDULE_START = "07:00"
 DEFAULT_SCHEDULE_END = "22:00"
+DEFAULT_SCHEDULE_DAYS: tuple[str, ...] = ()
+DEFAULT_SCHEDULE_TEMPLATE = ""
+
+SCHEDULE_DAYS: tuple[str, ...] = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 # Choices for the email_action_after_print option
 EMAIL_ACTIONS: dict[str, str] = {
@@ -88,10 +96,30 @@ SENSOR_JOB_LOG = "job_log"
 SENSOR_FILTER_PREVIEW = "filter_preview"
 SENSOR_PENDING_JOBS = "pending_jobs"
 BINARY_SENSOR_PRINTER_ONLINE = "printer_online"
+SELECT_IMAP_ACCOUNT = "imap_account"
+SELECT_TARGET_PRINTER = "target_printer"
+SELECT_DUPLEX_MODE = "default_duplex_mode"
+SELECT_EMAIL_ACTION = "email_action_after_print"
+SWITCH_AUTO_PRINT_ENABLED = "auto_print"
+SWITCH_AUTO_DELETE = "delete_after_printing"
+SWITCH_NOTIFY_ON_FAILURE = "notify_on_failure"
+SWITCH_NOTIFY_ON_SUCCESS = "notify_on_success"
+SWITCH_SCHEDULE_ENABLED = "print_schedule"
+TEXT_ALLOWED_SENDERS = "allowed_senders"
+TEXT_FOLDER_FILTER = "folder_filter"
+TEXT_BOOKLET_PATTERNS = "booklet_patterns"
+TEXT_QUEUE_FOLDER = "queue_folder"
+TEXT_EMAIL_ARCHIVE_FOLDER = "email_archive_folder"
+TEXT_SCHEDULE_START = "schedule_start"
+TEXT_SCHEDULE_END = "schedule_end"
+TEXT_SCHEDULE_DAYS = "schedule_days"
+TEXT_SCHEDULE_TEMPLATE = "schedule_template"
 BUTTON_TEST_PAGE = "test_page"
 BUTTON_CHECK_FILTER = "check_filter"
 BUTTON_RETRY_LAST_FAILED = "retry_last_failed"
 BUTTON_FLUSH_PENDING = "flush_pending"
+BUTTON_PRINT_EMAIL_PREFIX = "print_email"
+BUTTON_PRINT_EMAIL_SLOTS = 5
 
 # Event fired after each print job — appears in HA Logbook
 EVENT_JOB_COMPLETED = "print_bridge_job_completed"

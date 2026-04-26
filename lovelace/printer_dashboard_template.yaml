@@ -1,0 +1,116 @@
+# Print Bridge - Easy Printer Dashboard Template
+#
+# Paste this as a dashboard view:
+#   Dashboard -> Edit -> Add View -> Manual configuration
+#
+# Replace every YOUR_SLUG with your Print Bridge entity slug.
+# Search Developer Tools -> States for "print_bridge_" to find it.
+# Direct IPP installs normally use: direct_printer
+
+type: sections
+max_columns: 2
+title: Printer
+path: printer
+icon: mdi:printer-wireless
+sections:
+  - type: grid
+    cards:
+      - type: heading
+        heading: Status
+      - type: tile
+        entity: binary_sensor.print_bridge_YOUR_SLUG_printer_online
+      - type: tile
+        entity: sensor.print_bridge_YOUR_SLUG_last_print_job
+      - type: tile
+        entity: sensor.print_bridge_YOUR_SLUG_print_queue_depth
+      - type: tile
+        entity: sensor.print_bridge_YOUR_SLUG_scheduled_queue
+      - type: tile
+        entity: sensor.print_bridge_YOUR_SLUG_filter_preview
+      - type: tile
+        entity: sensor.print_bridge_YOUR_SLUG_job_log
+
+  - type: grid
+    cards:
+      - type: heading
+        heading: Print Actions
+      - type: tile
+        entity: button.print_bridge_YOUR_SLUG_check_filter
+      - type: tile
+        entity: button.print_bridge_YOUR_SLUG_print_test_page
+      - type: tile
+        entity: button.print_bridge_YOUR_SLUG_print_queued_jobs_now
+      - type: tile
+        entity: button.print_bridge_YOUR_SLUG_retry_last_failed_job
+
+  - type: grid
+    cards:
+      - type: heading
+        heading: Last 5 Emails
+      - type: tile
+        entity: button.print_bridge_YOUR_SLUG_print_email_1
+      - type: tile
+        entity: button.print_bridge_YOUR_SLUG_print_email_2
+      - type: tile
+        entity: button.print_bridge_YOUR_SLUG_print_email_3
+      - type: tile
+        entity: button.print_bridge_YOUR_SLUG_print_email_4
+      - type: tile
+        entity: button.print_bridge_YOUR_SLUG_print_email_5
+
+  - type: grid
+    cards:
+      - type: heading
+        heading: Main Settings
+      - type: tile
+        entity: switch.print_bridge_YOUR_SLUG_auto_print
+      - type: tile
+        entity: select.print_bridge_YOUR_SLUG_imap_account
+      - type: tile
+        entity: select.print_bridge_YOUR_SLUG_target_printer
+      - type: tile
+        entity: select.print_bridge_YOUR_SLUG_default_duplex_mode
+      - type: tile
+        entity: text.print_bridge_YOUR_SLUG_allowed_senders
+      - type: tile
+        entity: text.print_bridge_YOUR_SLUG_folder_filter
+      - type: tile
+        entity: text.print_bridge_YOUR_SLUG_booklet_patterns
+
+  - type: grid
+    cards:
+      - type: heading
+        heading: Cleanup
+      - type: tile
+        entity: switch.print_bridge_YOUR_SLUG_delete_after_printing
+      - type: tile
+        entity: text.print_bridge_YOUR_SLUG_queue_folder
+      - type: tile
+        entity: select.print_bridge_YOUR_SLUG_email_action_after_print
+      - type: tile
+        entity: text.print_bridge_YOUR_SLUG_email_archive_folder
+
+  - type: grid
+    cards:
+      - type: heading
+        heading: Notifications
+      - type: tile
+        entity: switch.print_bridge_YOUR_SLUG_notify_on_failure
+      - type: tile
+        entity: switch.print_bridge_YOUR_SLUG_notify_on_success
+
+  - type: grid
+    cards:
+      - type: heading
+        heading: Schedule
+      - type: tile
+        entity: switch.print_bridge_YOUR_SLUG_print_schedule
+      - type: tile
+        entity: text.print_bridge_YOUR_SLUG_schedule_start
+      - type: tile
+        entity: text.print_bridge_YOUR_SLUG_schedule_end
+      - type: tile
+        entity: text.print_bridge_YOUR_SLUG_schedule_days
+      - type: tile
+        entity: text.print_bridge_YOUR_SLUG_schedule_template
+cards: []

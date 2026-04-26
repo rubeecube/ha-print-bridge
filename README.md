@@ -7,8 +7,8 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-99%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.9-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-122%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.11-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
@@ -49,9 +49,13 @@ for booklet printing, and sends an IPP/2.0 `Print-Job` directly to CUPS.
 | **Audit log** | Every print job fires `print_bridge_job_completed` → appears in HA Logbook |
 | **Job history sensor** | Last 50 jobs with sender, duplex, timestamp as attributes |
 | **Filter preview** | Press a button to scan the mailbox and see which emails would be printed |
+| **One-press mail printing** | Dashboard buttons print the latest five matching mailbox emails |
+| **Mailbox/printer selectors** | Dashboard selects choose which IMAP account to scan and which printer receives manual jobs |
+| **Dashboard configuration** | Switch/select/text entities let Lovelace manage filters, duplex, cleanup, notifications, and schedule settings |
+| **Scheduled printing** | Hold jobs outside allowed days, hours, or a custom HA template gate |
 | **Blueprint** | Advanced per-sender/per-keyword rules with folder, duplex, and booklet logic |
-| **Lovelace dashboard** | Ready-made audit view — job table, filter preview, statistics |
-| **Services** | `print_file`, `clear_queue`, `process_imap_part`, `check_filter` |
+| **Lovelace dashboard** | Paste-ready printer view plus detailed audit view |
+| **Services** | `print_file`, `clear_queue`, `process_imap_part`, `check_filter`, `print_email` |
 
 ---
 
@@ -88,8 +92,8 @@ Any WiFi printer with AirPrint support (manufactured after ~2012) has a built-in
 Print Bridge can send jobs directly to the printer's endpoint, for example:
 
 ```
-http://10.0.0.23/ipp/print        (standard AirPrint path)
-http://10.0.0.23:631/ipp/print    (CUPS-style port)
+http://printer.local/ipp/print        (standard AirPrint path)
+http://printer.local:631/ipp/print    (CUPS-style port)
 ```
 
 No add-ons, no CUPS required. Set this URL in the **Direct IPP Printer URL** field during setup.
@@ -149,7 +153,7 @@ For any AirPrint / IPP-capable printer on your network (including most Canon PIX
 
 | Field | Example |
 |---|---|
-| Direct IPP Printer URL | `http://10.0.0.23/ipp/print` or `ipp://10.0.0.23/ipp/print` |
+| Direct IPP Printer URL | `http://printer.local/ipp/print` or `ipp://printer.local/ipp/print` |
 
 The integration sends an IPP `Print-Job` packet containing a PDF directly to the printer. No conversion layer is needed — modern AirPrint printers accept PDF natively. Leave the CUPS fields empty.
 
@@ -157,7 +161,7 @@ The integration sends an IPP `Print-Job` packet containing a PDF directly to the
 
 | Field | Example | Description |
 |---|---|---|
-| CUPS Base URL | `http://10.0.0.23:631` | Auto-filled if CUPS is found; edit if on a different host |
+| CUPS Base URL | `http://cups.local:631` | Auto-filled if CUPS is found; edit if on a different host |
 | Printer Name | `Canon_MG3600_series` | Select from discovered printers, or choose **Enter name manually…** |
 
 Use CUPS when: the printer is USB-attached, needs driver/raster conversion, or you want a managed print queue.
@@ -186,6 +190,10 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 | **Archive Folder** | `INBOX/Printed` | Target folder when "Move to archive folder" is selected. Created automatically by most IMAP servers. |
 | **Notify when print fails** | On | Send a HA persistent notification when a job fails (with error details). |
 | **Notify when print succeeds** | Off | Send a HA persistent notification when a job completes successfully. |
+| **Enable print schedule** | Off | Hold matching jobs in the scheduled queue until the configured day, hour, and template gates are open. |
+| **Print window start/end** | `07:00` / `22:00` | Allowed local print hours in 24-hour `HH:MM` format. Windows can wrap midnight. |
+| **Print days** | *(every day)* | Optional weekday list. Use `mon`, `tue`, full names, or `1`-`7`; one per line or comma-separated. |
+| **Print schedule template** | *(empty)* | Optional HA template. Jobs print only when it renders truthy (`true`, `on`, `yes`, or `1`). Available variables include `now`, `schedule_time`, `schedule_weekday`, `schedule_window_day`, `schedule_days`, `schedule_start`, `schedule_end`, and `printer_name`. |
 
 ---
 
@@ -202,20 +210,20 @@ All sensors, buttons, and binary sensors appear here. You can press **Check Filt
 
 ### 2. Add the management dashboard
 
-Copy `lovelace/print_bridge_audit.yaml` from the repo into a new dashboard view:
+For the easiest setup, copy `lovelace/printer_dashboard_template.yaml` from the repo into a new dashboard view:
 
 > Your Dashboard → Edit → Add View → Manual configuration (YAML) → paste the file contents
 
 Replace `YOUR_SLUG` with the entity slug shown in Developer Tools → States when you search "print\_bridge" (e.g. `canonmg3600series`).
 
-The dashboard includes a **one-click blueprint install button** — press it to add the automation blueprint.
+The simple template includes component configuration controls, mailbox/printer selectors, status tiles, and print actions. The detailed audit view remains available at `lovelace/print_bridge_audit.yaml`.
 
 ### 3. Choose your printing mode
 
-Go to **Settings → Print Bridge → Configure**:
+Use the dashboard **Auto Print** switch:
 
-- **Enable automatic printing = On** — simple setup; Print Bridge prints all PDFs from allowed senders automatically.
-- **Enable automatic printing = Off** (default) — use the automation blueprint for per-sender / per-keyword rules.
+- **On** — simple setup; Print Bridge prints all PDFs from allowed senders automatically.
+- **Off** — use the automation blueprint for per-sender / per-keyword rules.
 
 ### 4. Enable debug logging (troubleshooting)
 
@@ -239,7 +247,14 @@ Then go to **Settings → System → Logs** to view debug output. This shows eac
 | `sensor.print_bridge_*_last_print_job` | Sensor | `success` / `failed` | `last_filename`, `last_status`, `sender`, `duplex`, `booklet`, `timestamp` |
 | `sensor.print_bridge_*_job_log` | Sensor | Total jobs sent | `jobs[]` — last 50 print attempts with full metadata |
 | `sensor.print_bridge_*_filter_preview` | Sensor | Matching emails with PDF | `emails[]`, `checked_at`, `imap_account`, `total_found`, `matching_filter`, `with_pdf` |
+| `sensor.print_bridge_*_scheduled_queue` | Sensor | Queued job count | `jobs[]`, `schedule_enabled`, `schedule_start`, `schedule_end`, `schedule_days`, `schedule_template` |
 | `binary_sensor.print_bridge_*_printer_online` | Binary Sensor | `on` / `off` | — |
+| `select.print_bridge_*_imap_account` | Select | Selected IMAP account | Used by **Check Filter** and on-demand email printing when no account is specified |
+| `select.print_bridge_*_target_printer` | Select | Selected printer | Used by dashboard print actions and default print services |
+| `select.print_bridge_*_default_duplex_mode` | Select | Duplex mode | Updates the default duplex option |
+| `select.print_bridge_*_email_action_after_print` | Select | Email action | Updates post-print mailbox cleanup behavior |
+| `switch.print_bridge_*_*` | Switch | `on` / `off` | Auto-print, delete-after-printing, notifications, and schedule enablement |
+| `text.print_bridge_*_*` | Text | Current value | Sender/folder filters, booklet patterns, queue/archive folders, and schedule fields |
 | `button.print_bridge_*_print_test_page` | Button | — | Sends a built-in one-page PDF to the printer |
 | `button.print_bridge_*_check_filter` | Button | — | Scans the mailbox and updates `filter_preview` sensor |
 
@@ -335,10 +350,11 @@ Mail Server ──IMAP IDLE──► HA IMAP Integration ──imap_content even
                                                                               │
                           1. Check: is sender in allowed_senders?             │
                           2. Check: is folder in folder_filter?               │
-                          3. For each PDF part → imap.fetch_part ◄────────────┘
-                          4. Booklet? → reorder pages
-                          5. Build IPP/2.0 packet → POST to CUPS
-                          6. Fire print_bridge_job_completed → Logbook
+                          3. Check: schedule day/hour/template open?          │
+                          4. For each PDF part → imap.fetch_part ◄────────────┘
+                          5. Booklet? → reorder pages
+                          6. Build IPP/2.0 packet → POST to CUPS
+                          7. Fire print_bridge_job_completed → Logbook
 ```
 
 ---
@@ -411,7 +427,8 @@ imap_content event received
 
 ## Lovelace Audit Dashboard
 
-A ready-made dashboard view is included at [`lovelace/print_bridge_audit.yaml`](lovelace/print_bridge_audit.yaml).
+A paste-ready dashboard view is included at [`lovelace/printer_dashboard_template.yaml`](lovelace/printer_dashboard_template.yaml).
+The fuller audit dashboard is still available at [`lovelace/print_bridge_audit.yaml`](lovelace/print_bridge_audit.yaml).
 
 Add it as a new view to any dashboard (**Edit → Add View → Manual Configuration (YAML)**).
 Replace `PRINTER_NAME` with the slug for your printer queue name.
@@ -486,13 +503,13 @@ A: No. HA's `ipp` integration ([docs](https://www.home-assistant.io/integrations
 | **Useful together** | Yes — monitors the same printer | Yes — sends jobs to same printer |
 
 **Q: Do I need CUPS at all?**  
-A: Not for modern AirPrint printers. If your printer has an IPP endpoint (most WiFi printers made after ~2015 do), use **Direct IPP mode** with a URL like `http://10.0.0.23/ipp/print`. CUPS is useful when the printer is USB-attached, needs format conversion (PCL/PostScript), or you want a managed queue.
+A: Not for modern AirPrint printers. If your printer has an IPP endpoint (most WiFi printers made after ~2015 do), use **Direct IPP mode** with a URL like `http://printer.local/ipp/print`. CUPS is useful when the printer is USB-attached, needs format conversion (PCL/PostScript), or you want a managed queue.
 
 **Q: How do I find my printer's IPP URL?**  
-A: Common paths: `http://printer-ip/ipp/print`, `http://printer-ip:631/ipp/print`. Your router's device list shows the printer's IP. For Canon PIXMA: the embedded server is usually at port 80 with path `/ipp/print`.
+A: Common paths: `http://printer.local/ipp/print`, `http://printer.local:631/ipp/print`, or the same paths with your printer host name. Your router's device list shows the printer's network name. For Canon PIXMA: the embedded server is usually at port 80 with path `/ipp/print`.
 
 **Q: CUPS is on a different host. What URL do I use?**  
-A: `http://<cups-host-ip>:631`. When using the CUPS add-on on HA OS with host networking, the host IP is your HA LAN address.
+A: `http://<cups-host>:631`. When using the CUPS add-on on HA OS with host networking, the host can be your HA host name.
 
 ---
 

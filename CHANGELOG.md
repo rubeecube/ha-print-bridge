@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.11] — 2026-04-26
+
+### Added
+
+- **One-press mailbox printing** — the integration now creates five `button.print_bridge_*_print_email_N` entities backed by the latest filter preview, so the dashboard can print the latest five matching PDF emails directly.
+- **Mailbox and target-printer selects** — new `select.print_bridge_*_imap_account` and `select.print_bridge_*_target_printer` entities let the dashboard choose which mailbox to scan and which printer receives manual jobs.
+- **Dashboard configuration entities** — component options are now exposed as switch/select/text entities so the Lovelace view can manage filters, duplex, notifications, cleanup, and schedule settings.
+- **Easy printer dashboard template** — added `lovelace/printer_dashboard_template.yaml`, a paste-ready sections view with status, print actions, latest email buttons, and all dashboard configuration controls.
+- **Dashboard last-five mail view** — `lovelace/print_bridge_audit.yaml` now shows only the latest five printable emails and includes pressable buttons for each one.
+
+### Changed
+
+- Bumped package metadata to `0.1.11`.
+- Direct IPP entities now use a stable `direct_printer` slug instead of embedding the printer IP address, with automatic migration for existing IP-based entity IDs.
+
+---
+
 ## [0.1.3] — 2026-04-23
 
 ### Fixed
@@ -48,7 +65,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **mDNS printer discovery** — the original `AsyncServiceBrowser` had event-loop scheduling conflicts with `HaZeroconf`. Replaced with a synchronous `ServiceBrowser` running in `hass.async_add_executor_job`. Service info is now resolved inside the `add_service` callback while the browser is live.
 - **CUPS fields required even in Direct IPP mode** — `CONF_CUPS_URL` and `CONF_PRINTER_NAME` changed from `vol.Required` to `vol.Optional`. A validation error is shown when neither a Direct IPP URL nor a CUPS URL+name is provided.
-- **Hardcoded IP address** — `DEFAULT_CUPS_URL` was `"http://10.0.0.23:631"`. Changed to `""` (filled from discovery or typed by the user).
+- **Hardcoded IP address** — `DEFAULT_CUPS_URL` used to point at one printer host. Changed to `""` (filled from discovery or typed by the user).
 - **CUPS fields shown when CUPS is not installed** — the setup form now conditionally shows CUPS fields only when CUPS was discovered on the HA host. When not found, an explanatory message is shown instead.
 
 ### Added
@@ -76,7 +93,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Duplex control** — one-sided, two-sided long-edge (portrait), two-sided short-edge (landscape).
 - **Booklet printing** — automatic saddle-stitch page reordering for filenames matching configurable patterns.
 - **Email post-processing** — mark as read, move to archive folder, or delete after printing.
-- **Print schedule** — allowed time window with deferred queue; jobs outside the window are held and flushed automatically when the window opens.
+- **Print schedule** — allowed days, hours, and optional HA template gate with deferred queue; jobs outside the schedule are held and flushed automatically when it opens.
 - **Retry** — re-fetch and reprint any email job from history using its stored IMAP metadata.
 - **On-demand print** — `print_bridge.print_email` service to print any mailbox email by UID.
 
@@ -104,6 +121,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.10]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.10
 [0.1.3]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.3
 [0.1.2]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.2
 [0.1.1]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.1

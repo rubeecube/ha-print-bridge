@@ -11,7 +11,15 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BUTTON_CHECK_FILTER, BUTTON_FLUSH_PENDING, BUTTON_RETRY_LAST_FAILED, BUTTON_TEST_PAGE, DOMAIN
+from .const import (
+    BUTTON_CHECK_FILTER,
+    BUTTON_FLUSH_PENDING,
+    BUTTON_PRINT_EMAIL_PREFIX,
+    BUTTON_PRINT_EMAIL_SLOTS,
+    BUTTON_RETRY_LAST_FAILED,
+    BUTTON_TEST_PAGE,
+    DOMAIN,
+)
 from .coordinator import AutoPrintCoordinator
 from .sensor import _device_info
 
@@ -49,12 +57,18 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: AutoPrintCoordinator = entry.runtime_data
-    async_add_entities([
-        TestPageButton(coordinator, entry),
-        CheckFilterButton(coordinator, entry),
-        RetryLastFailedButton(coordinator, entry),
-        FlushPendingButton(coordinator, entry),
-    ])
+    async_add_entities(
+        [
+            TestPageButton(coordinator, entry),
+            CheckFilterButton(coordinator, entry),
+            RetryLastFailedButton(coordinator, entry),
+            FlushPendingButton(coordinator, entry),
+            *[
+                PrintPreviewEmailButton(coordinator, entry, slot)
+                for slot in range(BUTTON_PRINT_EMAIL_SLOTS)
+            ],
+        ]
+    )
 
 
 class TestPageButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
@@ -71,7 +85,8 @@ class TestPageButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
 
     async def async_press(self) -> None:
         """Send the built-in test page to the printer."""
-        result = await self.coordinator.async_send_print_job(
+        target = self.coordinator.selected_printer_coordinator
+        result = await target.async_send_print_job(
             filename="auto_print_test_page.pdf",
             pdf_data=_TEST_PAGE_CONTENT,
             duplex_mode="one-sided",
@@ -147,3 +162,86 @@ class FlushPendingButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
     async def async_press(self) -> None:
         """Flush the schedule queue and print all waiting jobs now."""
         await self.coordinator.async_flush_pending()
+
+
+class PrintPreviewEmailButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
+    """Print one of the latest matching emails from the filter preview."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:email-fast-outline"
+
+    def __init__(
+        self, coordinator: AutoPrintCoordinator, entry: ConfigEntry, slot: int
+    ) -> None:
+        super().__init__(coordinator)
+        self._slot = slot
+        self._attr_unique_id = (
+            f"{entry.entry_id}_{BUTTON_PRINT_EMAIL_PREFIX}_{slot + 1}"
+        )
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def _email(self) -> dict | None:
+        data = self.coordinator.data
+        if not data or not data.filter_preview:
+            return None
+        printable = [
+            email.as_dict()
+            for email in data.filter_preview.emails
+            if email.has_pdf and email.matches_filter
+        ]
+        if self._slot >= len(printable):
+            return None
+        return printable[self._slot]
+
+    @property
+    def name(self) -> str:
+        """Return a compact, dynamic label for the email slot."""
+        email = self._email
+        if not email:
+            return f"Print Email {self._slot + 1}"
+        subject = email.get("subject") or "(no subject)"
+        return f"Print Email {self._slot + 1}: {subject[:48]}"
+
+    @property
+    def available(self) -> bool:
+        """Only available after a scan finds a printable email in this slot."""
+        return self._email is not None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose the scanned email represented by this button."""
+        email = self._email
+        if not email:
+            return {"slot": self._slot + 1}
+        return {
+            "slot": self._slot + 1,
+            "uid": email.get("uid"),
+            "subject": email.get("subject"),
+            "sender": email.get("sender"),
+            "date": email.get("date"),
+            "folder": email.get("folder"),
+            "pdf_count": email.get("pdf_count"),
+        }
+
+    async def async_press(self) -> None:
+        """Print all PDF attachments from the email in this slot."""
+        email = self._email
+        data = self.coordinator.data
+        preview = data.filter_preview if data else None
+        if not email or not preview:
+            raise HomeAssistantError(
+                "No scanned email is available for this button. Run Check Filter first."
+            )
+
+        target = self.coordinator.selected_printer_coordinator
+        result = await target.async_print_email(
+            uid=email["uid"],
+            imap_entry_id=preview.imap_entry_id,
+        )
+        failures = [r for r in result["results"] if not r["success"]]
+        if failures:
+            first = failures[0]
+            raise HomeAssistantError(
+                f"Email print failed for '{first['filename']}': {first['error']}"
+            )

@@ -21,6 +21,7 @@ from custom_components.print_bridge.const import (
     DOMAIN,
     SERVICE_CHECK_FILTER,
     SERVICE_CLEAR_QUEUE,
+    SERVICE_PRINT_EMAIL,
     SERVICE_PRINT_FILE,
     SERVICE_PROCESS_IMAP_PART,
     SERVICE_RETRY_JOB,
@@ -48,7 +49,7 @@ async def test_setup_registers_services(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
-    """All five services must be registered after a successful setup."""
+    """All services must be registered after a successful setup."""
     entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
@@ -56,6 +57,7 @@ async def test_setup_registers_services(
 
     for svc in (
         SERVICE_PRINT_FILE,
+        SERVICE_PRINT_EMAIL,
         SERVICE_CLEAR_QUEUE,
         SERVICE_PROCESS_IMAP_PART,
         SERVICE_CHECK_FILTER,
@@ -76,6 +78,9 @@ async def test_setup_registers_all_platforms(
     assert "sensor" in platform_domains
     assert "binary_sensor" in platform_domains
     assert "button" in platform_domains
+    assert "select" in platform_domains
+    assert "switch" in platform_domains
+    assert "text" in platform_domains
 
 
 async def test_imap_content_listener_registered(
@@ -144,6 +149,7 @@ async def test_unload_removes_services_when_last_entry_unloads(
 
     for svc in (
         SERVICE_PRINT_FILE,
+        SERVICE_PRINT_EMAIL,
         SERVICE_CLEAR_QUEUE,
         SERVICE_PROCESS_IMAP_PART,
         SERVICE_CHECK_FILTER,

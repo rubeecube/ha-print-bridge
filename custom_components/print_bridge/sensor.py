@@ -12,11 +12,10 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-import urllib.parse
-
 from .const import (
     ATTR_LAST_FILENAME,
     ATTR_LAST_STATUS,
+    CONF_DIRECT_PRINTER_URL,
     CONF_PRINTER_NAME,
     DOMAIN,
     SENSOR_FILTER_PREVIEW,
@@ -48,11 +47,10 @@ async def async_setup_entry(
 
 
 def _device_info(entry: ConfigEntry) -> DeviceInfo:
-    # Safe for both CUPS mode (has CONF_PRINTER_NAME) and Direct IPP mode (has CONF_DIRECT_PRINTER_URL).
-    from .const import CONF_DIRECT_PRINTER_URL
+    # Use a stable direct-mode label so entity_ids do not include DHCP-assigned IPs.
     printer_label = (
         entry.data.get(CONF_PRINTER_NAME)
-        or urllib.parse.urlparse(entry.data.get(CONF_DIRECT_PRINTER_URL, "")).hostname
+        or ("Direct Printer" if entry.data.get(CONF_DIRECT_PRINTER_URL) else None)
         or "Printer"
     )
     return DeviceInfo(
@@ -200,6 +198,7 @@ class FilterPreviewSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity)
         return {
             "checked_at": preview.checked_at,
             "imap_account": preview.imap_account,
+            "imap_entry_id": preview.imap_entry_id,
             "total_found": preview.total_found,
             "matching_filter": preview.matching,
             "with_pdf": preview.with_pdf,
@@ -212,7 +211,8 @@ class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
 
     state      : number of queued jobs
     attributes : jobs[] list with filename, sender, queued_at, uid
-                 schedule_start, schedule_end, schedule_enabled
+                 schedule_enabled, schedule_start, schedule_end,
+                 schedule_days, schedule_template
     """
 
     _attr_has_entity_name = True
@@ -235,8 +235,10 @@ class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         from .const import (
-            CONF_SCHEDULE_ENABLED, CONF_SCHEDULE_START, CONF_SCHEDULE_END,
-            DEFAULT_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_START, DEFAULT_SCHEDULE_END,
+            CONF_SCHEDULE_DAYS, CONF_SCHEDULE_ENABLED, CONF_SCHEDULE_END,
+            CONF_SCHEDULE_START, CONF_SCHEDULE_TEMPLATE, DEFAULT_SCHEDULE_DAYS,
+            DEFAULT_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_END,
+            DEFAULT_SCHEDULE_START, DEFAULT_SCHEDULE_TEMPLATE,
         )
         opts = self._entry.options
         data = self.coordinator.data
@@ -244,5 +246,9 @@ class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
             "schedule_enabled": opts.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED),
             "schedule_start": opts.get(CONF_SCHEDULE_START, DEFAULT_SCHEDULE_START),
             "schedule_end": opts.get(CONF_SCHEDULE_END, DEFAULT_SCHEDULE_END),
+            "schedule_days": list(opts.get(CONF_SCHEDULE_DAYS, DEFAULT_SCHEDULE_DAYS)),
+            "schedule_template": opts.get(
+                CONF_SCHEDULE_TEMPLATE, DEFAULT_SCHEDULE_TEMPLATE
+            ),
             "jobs": [j.as_dict() for j in (data.pending_jobs if data else [])],
         }

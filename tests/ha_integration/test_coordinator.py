@@ -14,8 +14,9 @@ Covers:
 from __future__ import annotations
 
 import base64
+import socket
 import struct
-from datetime import time as dt_time
+from datetime import datetime, time as dt_time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import web
@@ -35,6 +36,7 @@ from custom_components.print_bridge.coordinator import (
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
 
 _FAKE_PDF = b"%PDF-1.4 fake"
+_LOOPBACK_HOST = socket.gethostbyname("localhost")
 
 
 # ---------------------------------------------------------------------------
@@ -104,11 +106,11 @@ async def _start_fake_ipp_server(status_code: int = 0x0000):
     app.router.add_post("/printers/TestPrinter", _handle_print)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
+    site = web.TCPSite(runner, _LOOPBACK_HOST, 0)
     await site.start()
     sockets = site._server.sockets  # type: ignore[union-attr]
     port = sockets[0].getsockname()[1]
-    return f"http://127.0.0.1:{port}", received, runner
+    return f"http://{_LOOPBACK_HOST}:{port}", received, runner
 
 
 def _register_fake_imap_fetch_part(hass: HomeAssistant) -> None:
@@ -294,6 +296,71 @@ async def test_job_queued_outside_schedule(hass: HomeAssistant) -> None:
     mock_fetch.assert_not_called()
     assert len(coordinator._pending_jobs) == 1
     assert coordinator._pending_jobs[0].filename == "queued.pdf"
+
+
+async def test_schedule_days_block_unlisted_weekday(hass: HomeAssistant) -> None:
+    """A closed weekday holds jobs even when the hour window is open."""
+    opts = {
+        **MOCK_OPTIONS,
+        "schedule_enabled": True,
+        "schedule_start": "00:00",
+        "schedule_end": "23:59",
+        "schedule_days": ["tue"],
+    }
+    _, coordinator = await _setup_coordinator(hass, options=opts)
+
+    with patch("homeassistant.util.dt.now", return_value=datetime(2026, 4, 27, 12, 0)):
+        assert coordinator._is_within_schedule() is False
+
+
+async def test_schedule_days_wrapped_window_uses_start_day(
+    hass: HomeAssistant,
+) -> None:
+    """After-midnight hours in a wrapped window belong to the prior schedule day."""
+    opts = {
+        **MOCK_OPTIONS,
+        "schedule_enabled": True,
+        "schedule_start": "22:00",
+        "schedule_end": "07:00",
+        "schedule_days": ["fri"],
+    }
+    _, coordinator = await _setup_coordinator(hass, options=opts)
+
+    with patch("homeassistant.util.dt.now", return_value=datetime(2026, 4, 25, 1, 0)):
+        assert coordinator._is_within_schedule() is True
+
+
+async def test_schedule_template_blocks_when_false(hass: HomeAssistant) -> None:
+    """The optional schedule template can close an otherwise open schedule."""
+    opts = {
+        **MOCK_OPTIONS,
+        "schedule_enabled": True,
+        "schedule_start": "00:00",
+        "schedule_end": "23:59",
+        "schedule_template": "{{ false }}",
+    }
+    _, coordinator = await _setup_coordinator(hass, options=opts)
+
+    with patch("homeassistant.util.dt.now", return_value=datetime(2026, 4, 27, 12, 0)):
+        assert coordinator._is_within_schedule() is False
+
+
+async def test_schedule_template_can_use_schedule_variables(hass: HomeAssistant) -> None:
+    """Schedule templates receive useful variables for custom gates."""
+    opts = {
+        **MOCK_OPTIONS,
+        "schedule_enabled": True,
+        "schedule_start": "08:00",
+        "schedule_end": "20:00",
+        "schedule_days": ["monday"],
+        "schedule_template": (
+            "{{ schedule_weekday == 'mon' and printer_name == 'TestPrinter' }}"
+        ),
+    }
+    _, coordinator = await _setup_coordinator(hass, options=opts)
+
+    with patch("homeassistant.util.dt.now", return_value=datetime(2026, 4, 27, 12, 0)):
+        assert coordinator._is_within_schedule() is True
 
 
 async def test_flush_pending_prints_and_clears_queue(hass: HomeAssistant) -> None:
@@ -501,7 +568,7 @@ async def test_send_print_job_posts_to_ipp_endpoint(hass: HomeAssistant) -> None
 
     assert result.success is True
     post_url = mock_session.post.call_args.args[0]
-    assert post_url == "http://10.0.0.1:631/printers/TestPrinter"
+    assert post_url == "http://cups.local:631/printers/TestPrinter"
 
 
 async def test_send_print_job_rejects_ipp_error_body(hass: HomeAssistant) -> None:
@@ -559,7 +626,7 @@ async def test_imap_event_posts_pdf_to_fake_ipp_printer(
         assert received["content_type"] == "application/ipp"
         assert b"printer-uri" in received["body"]
         assert (
-            f"ipp://127.0.0.1:{port}/printers/TestPrinter".encode()
+            f"ipp://{_LOOPBACK_HOST}:{port}/printers/TestPrinter".encode()
             in received["body"]
         )
         assert received["body"].endswith(_FAKE_PDF)

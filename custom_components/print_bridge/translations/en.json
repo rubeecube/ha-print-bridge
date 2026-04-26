@@ -38,7 +38,9 @@
   },
   "options": {
     "error": {
-      "invalid_time_format": "Enter a valid time in HH:MM format (e.g. 07:00 or 22:30)."
+      "invalid_time_format": "Enter a valid time in HH:MM format (e.g. 07:00 or 22:30).",
+      "invalid_schedule_days": "Enter valid weekdays, such as mon, tue, friday, or sunday.",
+      "invalid_template": "Enter a valid Home Assistant template."
     },
     "step": {
       "init": {
@@ -59,7 +61,9 @@
           "notify_on_success": "Notify when print succeeds",
           "schedule_enabled": "Enable print schedule (time window)",
           "schedule_start": "Print window start (HH:MM)",
-          "schedule_end": "Print window end (HH:MM)"
+          "schedule_end": "Print window end (HH:MM)",
+          "schedule_days": "Print days (one per line)",
+          "schedule_template": "Print schedule template"
         },
         "data_description": {
           "auto_print_enabled": "When ON: Print Bridge automatically prints PDF attachments from emails matching your sender/folder filters. When OFF (default after install): nothing prints automatically — configure your filters first, then enable, or use the Automation Blueprint for per-sender / per-keyword rules.",
@@ -74,7 +78,9 @@
           "notify_on_success": "Send a Home Assistant notification when a print job completes successfully.",
           "schedule_enabled": "Jobs arriving outside the time window are held in a queue and printed automatically when the window opens.",
           "schedule_start": "Start of the allowed print window (HH:MM, 24-hour). Example: 07:00",
-          "schedule_end": "End of the allowed print window (HH:MM, 24-hour). Wrap midnight is supported — e.g. 22:00 start and 07:00 end means print between 10 pm and 7 am."
+          "schedule_end": "End of the allowed print window (HH:MM, 24-hour). Wrap midnight is supported — e.g. 22:00 start and 07:00 end means print between 10 pm and 7 am.",
+          "schedule_days": "Optional weekdays allowed to print. Leave empty for every day. Accepts mon, tue, wed, thu, fri, sat, sun, full names, or 1-7.",
+          "schedule_template": "Optional Home Assistant template. Jobs print only when it renders true/on/yes/1. Available variables include now, schedule_time, schedule_weekday, schedule_window_day, schedule_days, schedule_start, schedule_end, and printer_name."
         }
       }
     }
@@ -89,6 +95,30 @@
     },
     "binary_sensor": {
       "printer_online": { "name": "Printer Online" }
+    },
+    "select": {
+      "imap_account":             { "name": "IMAP Account" },
+      "target_printer":           { "name": "Target Printer" },
+      "default_duplex_mode":      { "name": "Default Duplex Mode" },
+      "email_action_after_print": { "name": "Email Action after Print" }
+    },
+    "switch": {
+      "auto_print":            { "name": "Auto Print" },
+      "delete_after_printing": { "name": "Delete after Printing" },
+      "notify_on_failure":     { "name": "Notify on Failure" },
+      "notify_on_success":     { "name": "Notify on Success" },
+      "print_schedule":        { "name": "Print Schedule" }
+    },
+    "text": {
+      "allowed_senders":       { "name": "Allowed Senders" },
+      "folder_filter":         { "name": "Folder Filter" },
+      "booklet_patterns":      { "name": "Booklet Patterns" },
+      "queue_folder":          { "name": "Queue Folder" },
+      "email_archive_folder":  { "name": "Email Archive Folder" },
+      "schedule_start":        { "name": "Schedule Start" },
+      "schedule_end":          { "name": "Schedule End" },
+      "schedule_days":         { "name": "Schedule Days" },
+      "schedule_template":     { "name": "Schedule Template" }
     },
     "button": {
       "test_page":          { "name": "Print Test Page" },

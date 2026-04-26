@@ -18,7 +18,8 @@ print_email:
       name: IMAP Entry ID
       description: >-
         The config entry ID of the IMAP integration that holds the email.
-        Defaults to the first configured IMAP account.
+        Defaults to the selected IMAP Account entity, or the first configured
+        IMAP account when nothing has been selected.
       required: false
       selector:
         text:
@@ -46,7 +47,8 @@ print_email:
 print_file:
   name: Print File
   description: >-
-    Send a PDF file from the Home Assistant filesystem to the configured printer.
+    Send a PDF file from the Home Assistant filesystem to the selected target
+    printer.
   fields:
     file_path:
       name: File Path
@@ -83,7 +85,8 @@ print_file:
 clear_queue:
   name: Clear Print Queue
   description: >-
-    Delete all PDF files currently sitting in the configured print queue folder.
+    Delete all PDF files currently sitting in the selected target printer's
+    configured print queue folder.
 
 retry_job:
   name: Retry Print Job
@@ -142,7 +145,8 @@ check_filter:
       name: IMAP Entry ID
       description: >-
         Optional. The config entry ID of the IMAP integration to query.
-        Defaults to the first configured IMAP account.
+        Defaults to the selected IMAP Account entity, or the first configured
+        IMAP account when nothing has been selected.
       required: false
       selector:
         text:
@@ -151,7 +155,7 @@ process_imap_part:
   name: Process IMAP Email Part
   description: >-
     Fetch a specific PDF attachment from an IMAP message and send it to the
-    printer.  Intended to be called from automations and blueprints after an
+    selected target printer.  Intended to be called from automations and blueprints after an
     imap_content event.  Allows per-job overrides for duplex and booklet mode.
   fields:
     entry_id:

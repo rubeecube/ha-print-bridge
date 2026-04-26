@@ -8,6 +8,8 @@ imap.fetch_part to retrieve the bytes and sends them to CUPS via IPP.
 from __future__ import annotations
 
 import logging
+import re
+import urllib.parse
 
 import voluptuous as vol
 
@@ -16,8 +18,10 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from typing import TypeAlias
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
+    CONF_DIRECT_PRINTER_URL,
     CONF_DUPLEX_MODE,
     DOMAIN,
     DUPLEX_MODES,
@@ -32,11 +36,11 @@ from .const import (
     SERVICE_PROCESS_IMAP_PART,
     SERVICE_RETRY_JOB,
 )
-from .coordinator import AutoPrintCoordinator, _is_pdf_part
+from .coordinator import AutoPrintCoordinator
 
 logger = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "binary_sensor", "button"]
+PLATFORMS = ["sensor", "binary_sensor", "button", "select", "switch", "text"]
 
 _PRINT_FILE_SCHEMA = vol.Schema(
     {
@@ -60,6 +64,46 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
 
 # Type alias for config entries carrying AutoPrintCoordinator as runtime data.
 AutoPrintConfigEntry: TypeAlias = ConfigEntry[AutoPrintCoordinator]
+
+
+def _entity_slug(value: str) -> str:
+    """Return the entity-id slug HA used for old IP-derived direct labels."""
+    slug = re.sub(r"[^a-z0-9_]+", "_", value.lower())
+    return re.sub(r"_+", "_", slug).strip("_")
+
+
+def _async_migrate_direct_ip_entity_ids(
+    hass: HomeAssistant, entry: AutoPrintConfigEntry
+) -> None:
+    """Rename old direct-mode entity IDs that embedded the printer IP address."""
+    direct_url = entry.data.get(CONF_DIRECT_PRINTER_URL)
+    if not direct_url:
+        return
+
+    host = urllib.parse.urlparse(direct_url).hostname
+    if not host:
+        return
+
+    old_slug = _entity_slug(host)
+    if not old_slug:
+        return
+
+    registry = er.async_get(hass)
+    for entity in list(registry.entities.values()):
+        if entity.config_entry_id != entry.entry_id:
+            continue
+        domain, object_id = entity.entity_id.split(".", 1)
+        if old_slug not in object_id:
+            continue
+        new_entity_id = f"{domain}.{object_id.replace(old_slug, 'direct_printer', 1)}"
+        if new_entity_id == entity.entity_id or registry.async_is_registered(new_entity_id):
+            continue
+        registry.async_update_entity(entity.entity_id, new_entity_id=new_entity_id)
+        logger.info(
+            "Migrated Print Bridge entity_id from %s to %s",
+            entity.entity_id,
+            new_entity_id,
+        )
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -90,6 +134,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) ->
 
     # Store coordinator as runtime_data (HA 2024+ recommended pattern).
     entry.runtime_data = coordinator
+
+    _async_migrate_direct_ip_entity_ids(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -144,7 +190,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) ->
     if not hass.services.has_service(DOMAIN, SERVICE_PRINT_FILE):
         _register_services(hass)
 
-    # Reload when options change so the event filter picks up new senders.
+    # Refresh entities when options change; coordinator properties read options live.
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     return True
@@ -174,8 +220,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: AutoPrintConfigEntry) -> None:
-    """Reload the entry so options changes take effect immediately."""
-    await hass.config_entries.async_reload(entry.entry_id)
+    """Refresh entities after options change."""
+    if entry.runtime_data is not None and entry.runtime_data.data is not None:
+        entry.runtime_data.async_set_updated_data(entry.runtime_data.data)
 
 
 def _register_services(hass: HomeAssistant) -> None:
@@ -186,7 +233,7 @@ def _register_services(hass: HomeAssistant) -> None:
         duplex: str | None = call.data.get(FIELD_DUPLEX)
         booklet: bool = call.data.get(FIELD_BOOKLET, False)
 
-        coordinator = _get_any_coordinator(hass)
+        coordinator = _get_any_coordinator(hass).selected_printer_coordinator
         result = await coordinator.async_print_file(file_path, duplex, booklet)
         if not result.success:
             raise HomeAssistantError(
@@ -194,13 +241,13 @@ def _register_services(hass: HomeAssistant) -> None:
             )
 
     async def _handle_clear_queue(call: ServiceCall) -> None:
-        coordinator = _get_any_coordinator(hass)
+        coordinator = _get_any_coordinator(hass).selected_printer_coordinator
         deleted = await coordinator.async_clear_queue()
         logger.debug("Cleared %d file(s) from the print queue", deleted)
 
     async def _handle_process_imap_part(call: ServiceCall) -> None:
         """Service called by blueprints/automations to fetch an IMAP part and print it."""
-        coordinator = _get_any_coordinator(hass)
+        coordinator = _get_any_coordinator(hass).selected_printer_coordinator
         result = await coordinator.async_process_imap_part(
             entry_id=call.data["entry_id"],
             uid=call.data["uid"],
@@ -252,7 +299,7 @@ def _register_services(hass: HomeAssistant) -> None:
     )
 
     async def _handle_retry_job(call: ServiceCall) -> dict:
-        coordinator = _get_any_coordinator(hass)
+        coordinator = _get_any_coordinator(hass).selected_printer_coordinator
         job_index: int | None = call.data.get("job_index")
         imap_uid: str | None = call.data.get("uid")
         duplex: str | None = call.data.get("duplex")
@@ -321,70 +368,14 @@ def _register_services(hass: HomeAssistant) -> None:
         duplex: str | None = call.data.get("duplex")
         booklet: bool = call.data.get("booklet", False)
 
-        # Default to the first configured IMAP entry.
-        if not imap_entry_id:
-            imap_entries = hass.config_entries.async_entries("imap")
-            if not imap_entries:
-                raise HomeAssistantError(
-                    "No IMAP integration configured. "
-                    "Add the HA IMAP integration first."
-                )
-            imap_entry_id = imap_entries[0].entry_id
-
-        coordinator = _get_any_coordinator(hass)
-
-        # Fetch parts metadata to discover which parts are PDFs.
-        try:
-            fetch_result: dict = await hass.services.async_call(
-                "imap",
-                "fetch",
-                {"entry": imap_entry_id, "uid": uid},
-                blocking=True,
-                return_response=True,
-            )
-        except Exception as exc:
-            raise HomeAssistantError(
-                f"Failed to fetch email uid={uid}: {exc}"
-            ) from exc
-
-        parts: dict = fetch_result.get("parts", {})
-        pdf_parts = {
-            k: v for k, v in parts.items()
-            if _is_pdf_part(v)
-        }
-
-        if not pdf_parts:
-            raise HomeAssistantError(
-                f"No PDF attachments found in email uid={uid}. "
-                f"Available parts: {list(parts.keys())}"
-            )
-
-        results = []
-        for part_key, part_info in pdf_parts.items():
-            filename = (
-                part_info.get("filename")
-                or part_info.get("file_name")
-                or f"attachment_{part_key}.pdf"
-            )
-            result = await coordinator.async_process_imap_part(
-                entry_id=imap_entry_id,
-                uid=uid,
-                part_key=part_key,
-                filename=filename,
-                duplex_override=duplex,
-                booklet_override=booklet or None,
-            )
-            results.append({
-                "filename": result.filename,
-                "success": result.success,
-                "error": result.error,
-            })
-
-        return {
-            "uid": uid,
-            "printed": len(results),
-            "results": results,
-        }
+        controller = _get_any_coordinator(hass)
+        coordinator = controller.selected_printer_coordinator
+        return await coordinator.async_print_email(
+            uid=uid,
+            imap_entry_id=imap_entry_id or controller.selected_imap_entry_id,
+            duplex=duplex,
+            booklet=booklet,
+        )
 
     hass.services.async_register(
         DOMAIN,
