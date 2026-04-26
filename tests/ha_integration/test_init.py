@@ -83,6 +83,15 @@ async def test_setup_registers_all_platforms(
     assert "text" in platform_domains
 
 
+def test_brand_assets_are_packaged() -> None:
+    """HA serves custom integration icons from custom_components/<domain>/brand."""
+    from pathlib import Path
+
+    brand_dir = Path(__file__).parents[2] / "custom_components" / "print_bridge" / "brand"
+    for filename in ("icon.png", "logo.png", "dark_icon.png", "dark_logo.png"):
+        assert (brand_dir / filename).is_file()
+
+
 async def test_imap_content_listener_registered(
     hass: HomeAssistant,
     mock_coordinator_update,

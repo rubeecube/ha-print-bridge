@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.12] — 2026-04-26
+
+### Fixed
+
+- **Home Assistant integration icon** — added `custom_components/print_bridge/brand/` assets so HA's brands API can show the Print Bridge icon in the integration UI.
+
+### Changed
+
+- Bumped package metadata to `0.1.12`.
+
+---
+
 ## [0.1.11] — 2026-04-26
 
 ### Added
