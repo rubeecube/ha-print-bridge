@@ -1,16 +1,17 @@
 """Tests for custom_components/print_bridge/booklet_maker.py.
 
 Covers:
-  - Correct page count after booklet conversion (no double-adding of blank pages).
+  - Correct physical sheet-side count after booklet imposition.
   - Padding to next multiple of 4.
-  - Correct booklet page order for 4-page and 8-page inputs.
-  - Round-trip: booklet of a 4-page PDF is itself 4 pages.
+  - Correct 2-up booklet page order for 4-page and 8-page inputs.
 """
 
 import io
 
+import pypdfium2 as pdfium
 import pytest
 from pypdf import PdfReader
+from pypdf.generic import DecodedStreamObject, NameObject
 
 from conftest import make_pdf, pdf_page_count
 from booklet_maker import create_booklet
@@ -22,15 +23,15 @@ from booklet_maker import create_booklet
 @pytest.mark.parametrize(
     "input_pages, expected_pages",
     [
-        (4, 4),   # already multiple of 4 — no padding
-        (8, 8),
-        (1, 4),   # padded from 1 → 4
-        (2, 4),   # padded from 2 → 4
-        (3, 4),   # padded from 3 → 4
-        (5, 8),   # padded from 5 → 8
-        (6, 8),
-        (7, 8),
-        (9, 12),  # padded from 9 → 12
+        (4, 2),   # already multiple of 4 -> one duplex sheet
+        (8, 4),
+        (1, 2),   # padded from 1 -> 4 logical pages -> two sides
+        (2, 2),
+        (3, 2),
+        (5, 4),   # padded from 5 -> 8 logical pages -> four sides
+        (6, 4),
+        (7, 4),
+        (9, 6),   # padded from 9 -> 12 logical pages -> six sides
     ],
 )
 def test_output_page_count_is_padded_to_multiple_of_4(input_pages, expected_pages):
@@ -42,57 +43,91 @@ def test_output_page_count_is_padded_to_multiple_of_4(input_pages, expected_page
 
 
 def test_blank_padding_pages_not_doubled():
-    """Regression: the original code called writer.add_blank_page() which both
-    added the page to the writer immediately and returned it for the pages list,
-    so the same blank pages were later added a second time via add_page().
-    Verify that a 6-page input produces exactly 8 pages, not more.
-    """
+    """Regression: padding blanks should only exist inside imposed sheet sides."""
     result = create_booklet(make_pdf(6))
-    assert pdf_page_count(result) == 8, (
-        "Blank pages were double-added — got more than 8 pages for a 6-page input"
+    assert pdf_page_count(result) == 4, (
+        "Blank pages were double-added; expected four physical sides for six pages"
     )
 
 
 def test_no_extra_pages_for_already_aligned_input():
-    """A 4-page PDF requires no padding; output must be exactly 4 pages."""
+    """A 4-page PDF requires no padding; output must be one duplex sheet."""
     result = create_booklet(make_pdf(4))
-    assert pdf_page_count(result) == 4
+    assert pdf_page_count(result) == 2
+
+
+def test_imposed_sheet_is_landscape_two_up():
+    result = create_booklet(make_pdf(4))
+    first_sheet_side = PdfReader(io.BytesIO(result)).pages[0]
+
+    assert float(first_sheet_side.mediabox.width) == pytest.approx(842)
+    assert float(first_sheet_side.mediabox.height) == pytest.approx(595)
 
 
 # ── booklet page order tests ──────────────────────────────────────────────────
 
-def _page_labels(data: bytes) -> list[int]:
-    """Return 0-based page indices in the order they appear in *data*.
-
-    We encode the original page number as a unique page size: page N has
-    width = 100 + N points.  This lets us read back the order without needing
-    page labels in the PDF.
-    """
-    reader = PdfReader(io.BytesIO(data))
-    return [int(float(p.mediabox.width)) - 100 for p in reader.pages]
-
-
-def make_indexed_pdf(num_pages: int) -> bytes:
-    """Create a PDF where page N has width = (100 + N) points."""
+def _make_gray_indexed_pdf(num_pages: int) -> tuple[bytes, list[int]]:
+    """Create a PDF where each page has a unique grayscale fill."""
     from pypdf import PdfWriter
+
     writer = PdfWriter()
-    for i in range(num_pages):
-        writer.add_blank_page(width=100 + i, height=842)
+    grays = [30 + (i * 24) for i in range(num_pages)]
+    for gray in grays:
+        page = writer.add_blank_page(width=100, height=140)
+        stream = DecodedStreamObject()
+        stream.set_data(
+            f"{gray / 255:.3f} g 0 0 100 140 re f\n".encode("ascii")
+        )
+        page[NameObject("/Contents")] = writer._add_object(stream)
+
     buf = io.BytesIO()
     writer.write(buf)
-    return buf.getvalue()
+    return buf.getvalue(), grays
+
+
+def _sample_spreads(data: bytes) -> list[tuple[int, int]]:
+    """Return the detected grayscale value for the left and right page slots."""
+    document = pdfium.PdfDocument(data)
+    try:
+        spreads = []
+        for page_index in range(len(document)):
+            page = document[page_index]
+            try:
+                bitmap = page.render(scale=1)
+                image = bitmap.to_pil()
+                width, height = image.size
+                left = image.getpixel((width // 4, height // 2))[0]
+                right = image.getpixel(((width * 3) // 4, height // 2))[0]
+                spreads.append((left, right))
+            finally:
+                page.close()
+        return spreads
+    finally:
+        document.close()
 
 
 def test_booklet_order_4_pages():
     """4-page booklet: sheet 1 front=[3,0], sheet 1 back=[1,2]."""
-    result = create_booklet(make_indexed_pdf(4))
-    assert _page_labels(result) == [3, 0, 1, 2]
+    pdf_data, grays = _make_gray_indexed_pdf(4)
+    result = create_booklet(pdf_data)
+
+    assert _sample_spreads(result) == [
+        (pytest.approx(grays[3], abs=2), pytest.approx(grays[0], abs=2)),
+        (pytest.approx(grays[1], abs=2), pytest.approx(grays[2], abs=2)),
+    ]
 
 
 def test_booklet_order_8_pages():
-    """8-page booklet: [7,0,1,6,5,2,3,4]."""
-    result = create_booklet(make_indexed_pdf(8))
-    assert _page_labels(result) == [7, 0, 1, 6, 5, 2, 3, 4]
+    """8-page booklet: [7,0], [1,6], [5,2], [3,4]."""
+    pdf_data, grays = _make_gray_indexed_pdf(8)
+    result = create_booklet(pdf_data)
+
+    assert _sample_spreads(result) == [
+        (pytest.approx(grays[7], abs=2), pytest.approx(grays[0], abs=2)),
+        (pytest.approx(grays[1], abs=2), pytest.approx(grays[6], abs=2)),
+        (pytest.approx(grays[5], abs=2), pytest.approx(grays[2], abs=2)),
+        (pytest.approx(grays[3], abs=2), pytest.approx(grays[4], abs=2)),
+    ]
 
 
 # ── error handling ────────────────────────────────────────────────────────────

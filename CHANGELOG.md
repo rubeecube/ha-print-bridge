@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.16] — 2026-04-30
+
+### Fixed
+
+- **True booklet printing** — booklet mode now imposes two logical PDF pages onto each physical sheet side before sending the job, so `two-sided-short-edge` output folds as a real saddle-stitch booklet.
+- **Direct IPP timeout false failures** — direct printer jobs that time out after submission are treated as submitted, matching printers that print the job but never return the final IPP response.
+
+### Changed
+
+- Bumped package metadata to `0.1.16`.
+
+---
+
 ## [0.1.15] — 2026-04-29
 
 ### Fixed
@@ -179,6 +192,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.16]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.16
 [0.1.15]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.15
 [0.1.14]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.14
 [0.1.13]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.13

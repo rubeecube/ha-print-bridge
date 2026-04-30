@@ -5,30 +5,30 @@ All functions are pure (bytes in → bytes out) with no I/O or HA dependencies.
 
 from __future__ import annotations
 
+import copy
 import io
 import logging
 
-from pypdf import PdfReader, PdfWriter
+from pypdf import PageObject, PdfReader, PdfWriter, Transformation
 
 logger = logging.getLogger(__name__)
 
 
 def create_booklet(pdf_data: bytes) -> bytes:
-    """Reorder the pages of *pdf_data* for saddle-stitch (booklet) printing.
+    """Impose *pdf_data* for saddle-stitch booklet printing.
 
-    Pages are rearranged so that when the sheets are printed duplex
-    (two-sided short-edge) and folded, they read in the correct order.
+    The output PDF contains two logical source pages on each physical side.
+    When printed duplex using two-sided short-edge and folded, the pages read
+    in the correct order.
 
     The page count is padded to the next multiple of 4 with blank pages as
-    needed.  Blank pages are produced via a *temporary* PdfWriter instance
-    that is discarded after padding, ensuring they are never pre-inserted into
-    the output writer before the reordering loop runs.
+    needed.
 
     Args:
         pdf_data: Raw bytes of the source PDF.
 
     Returns:
-        Raw bytes of the booklet-ordered PDF.
+        Raw bytes of the imposed booklet PDF.
 
     Raises:
         ValueError: If *pdf_data* cannot be parsed or has no pages.
@@ -38,35 +38,71 @@ def create_booklet(pdf_data: bytes) -> bytes:
         raise ValueError("PDF has no pages")
 
     pages = list(reader.pages)
-    page_width = pages[0].mediabox.width
-    page_height = pages[0].mediabox.height
+    page_width = float(pages[0].mediabox.width)
+    page_height = float(pages[0].mediabox.height)
 
     # Pad to the next multiple of 4.
-    # Each blank is created via a fresh temporary PdfWriter that is immediately
-    # discarded, so no pages leak into the final writer ahead of time.
     while len(pages) % 4 != 0:
-        pad = PdfWriter()
-        blank = pad.add_blank_page(width=page_width, height=page_height)
+        blank = PageObject.create_blank_page(width=page_width, height=page_height)
         pages.append(blank)
 
     num_pages = len(pages)
 
-    # Build booklet page order (0-based indices).
-    # Sheet i front : [last-i, i]   for even i
-    # Sheet i back  : [i,   last-i] for odd i
-    new_order: list[int] = []
-    for i in range(num_pages // 2):
-        if i % 2 == 0:
-            new_order.append(num_pages - 1 - i)
-            new_order.append(i)
-        else:
-            new_order.append(i)
-            new_order.append(num_pages - 1 - i)
-
     writer = PdfWriter()
-    for idx in new_order:
-        writer.add_page(pages[idx])
+    for sheet_index in range(num_pages // 4):
+        left_front = num_pages - 1 - (sheet_index * 2)
+        right_front = sheet_index * 2
+        left_back = sheet_index * 2 + 1
+        right_back = num_pages - 2 - (sheet_index * 2)
+        writer.add_page(
+            _impose_spread(pages[left_front], pages[right_front], page_width, page_height)
+        )
+        writer.add_page(
+            _impose_spread(pages[left_back], pages[right_back], page_width, page_height)
+        )
 
     buf = io.BytesIO()
     writer.write(buf)
     return buf.getvalue()
+
+
+def _impose_spread(
+    left_page: PageObject,
+    right_page: PageObject,
+    source_width: float,
+    source_height: float,
+) -> PageObject:
+    """Return one landscape sheet side containing two scaled source pages."""
+    sheet_width = source_height
+    sheet_height = source_width
+    slot_width = sheet_width / 2
+    scale = min(slot_width / source_width, sheet_height / source_height)
+    rendered_width = source_width * scale
+    rendered_height = source_height * scale
+    y_offset = (sheet_height - rendered_height) / 2
+
+    sheet = PageObject.create_blank_page(width=sheet_width, height=sheet_height)
+    _merge_page(
+        sheet,
+        left_page,
+        Transformation()
+        .scale(scale)
+        .translate((slot_width - rendered_width) / 2, y_offset),
+    )
+    _merge_page(
+        sheet,
+        right_page,
+        Transformation()
+        .scale(scale)
+        .translate(slot_width + (slot_width - rendered_width) / 2, y_offset),
+    )
+    return sheet
+
+
+def _merge_page(
+    sheet: PageObject,
+    source_page: PageObject,
+    transformation: Transformation,
+) -> None:
+    # pypdf page merge operations can mutate page boxes, so use a copy.
+    sheet.merge_transformed_page(copy.copy(source_page), transformation)

@@ -665,6 +665,48 @@ async def test_send_print_job_reports_timeout_context_and_sanitizes_filename(
     assert "timeout=300s" in result.error
 
 
+async def test_direct_printer_timeout_after_post_is_treated_as_submitted(
+    hass: HomeAssistant,
+) -> None:
+    """Some direct IPP printers print the job but never return a final response."""
+    _, coordinator = await _setup_coordinator(
+        hass,
+        data={CONF_DIRECT_PRINTER_URL: "http://printer.local:631/ipp/print"},
+    )
+
+    mock_session = MagicMock()
+    mock_session.post.side_effect = asyncio.TimeoutError()
+
+    with (
+        patch(
+            "custom_components.print_bridge.coordinator.async_get_clientsession",
+            return_value=mock_session,
+        ),
+        patch(
+            "custom_components.print_bridge.coordinator.create_booklet",
+            return_value=_FAKE_PDF,
+        ) as mock_booklet,
+        patch.object(
+            coordinator,
+            "_async_prepare_document_for_printing",
+            new=AsyncMock(return_value=("application/pdf", _FAKE_PDF)),
+        ),
+    ):
+        result = await coordinator.async_send_print_job(
+            "Au Puits de La Paracha - Emor-Lag Baomer 5786 A4.pdf",
+            _FAKE_PDF,
+            "two-sided-short-edge",
+            True,
+        )
+
+    assert result.success is True
+    assert result.booklet is True
+    assert result.duplex == "two-sided-short-edge"
+    assert result.error.startswith("submitted; TimeoutError")
+    assert "http://printer.local:631/ipp/print" in result.error
+    mock_booklet.assert_called_once_with(_FAKE_PDF)
+
+
 def test_decode_mime_filename_removes_windows_1255_direction_marks() -> None:
     encoded = (
         "=?windows-1255?B?/v7+/v7+?= "

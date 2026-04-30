@@ -1348,7 +1348,32 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     duplex=duplex_mode, booklet=booklet,
                 )
 
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        except asyncio.TimeoutError as exc:
+            error = (
+                f"{_describe_exception(exc)} while POSTing to {self._ipp_endpoint} "
+                f"(timeout={_PRINT_JOB_TIMEOUT_SECONDS}s)"
+            )
+            if self._is_direct_mode:
+                logger.warning(
+                    "Timed out waiting for direct IPP response for '%s'; "
+                    "treating as submitted because some printers print without "
+                    "returning a final response: %s",
+                    filename,
+                    error,
+                )
+                return PrintJobResult(
+                    filename=filename,
+                    success=True,
+                    error=f"submitted; {error}",
+                    duplex=duplex_mode,
+                    booklet=booklet,
+                )
+            logger.error("Network error printing '%s': %s", filename, error)
+            return PrintJobResult(
+                filename=filename, success=False, error=error,
+                duplex=duplex_mode, booklet=booklet,
+            )
+        except aiohttp.ClientError as exc:
             error = (
                 f"{_describe_exception(exc)} while POSTing to {self._ipp_endpoint} "
                 f"(timeout={_PRINT_JOB_TIMEOUT_SECONDS}s)"
