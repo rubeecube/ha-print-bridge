@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, for example v0.1.16"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="$(sed -n 's/^version = "\([^"]*\)"/v\1/p' pyproject.toml | head -n 1)"
+          fi
+
+          if [[ -z "$tag" ]]; then
+            echo "Release tag is empty" >&2
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Verify and checkout tag
+        id: verify
+        shell: bash
+        run: |
+          tag="${{ steps.release.outputs.tag }}"
+          if ! git rev-parse --verify "refs/tags/$tag"; then
+            if [[ "$GITHUB_REF_TYPE" == "branch" ]]; then
+              echo "Tag $tag is not available yet; skipping branch release sync"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "Tag $tag does not exist" >&2
+            exit 1
+          fi
+
+          git checkout --detach "$tag"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Build release notes
+        if: steps.verify.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          version="${TAG#v}"
+          awk -v version="$version" '
+            $0 ~ "^## \\[" version "\\]" { capture = 1; next }
+            capture && $0 ~ "^---$" { exit }
+              capture { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+
+          if [[ ! -s /tmp/release-notes.md ]]; then
+            printf "Release %s\n" "$TAG" > /tmp/release-notes.md
+          fi
+
+      - name: Create release
+        if: steps.verify.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+            exit 0
+          fi
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$TAG" \
+            --notes-file /tmp/release-notes.md
