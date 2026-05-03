@@ -7,8 +7,8 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-139%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.18-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-146%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.19-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
@@ -191,6 +191,8 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 | **Archive Folder** | `INBOX/Printed` | Target folder when "Move to archive folder" is selected. Created automatically by most IMAP servers. |
 | **Notify when print fails** | On | Send a HA persistent notification when a job fails (with error details). |
 | **Notify when print succeeds** | Off | Send a HA persistent notification when a job completes successfully. |
+| **Reply to sender with print status** | Off | Send a status email to the original sender after printing. Requires an email-capable HA notify service. |
+| **Status Reply Notify Service** | *(empty)* | Notify service used for status replies, for example `notify.smtp`. |
 | **Enable print schedule** | Off | Hold matching jobs in the scheduled queue until the configured day, hour, and template gates are open. |
 | **Print window start/end** | `07:00` / `22:00` | Allowed local print hours in 24-hour `HH:MM` format. Windows can wrap midnight. |
 | **Print days** | *(every day)* | Optional weekday list. Use `mon`, `tue`, full names, or `1`-`7`; one per line or comma-separated. |
@@ -275,6 +277,9 @@ Print a PDF from the HA filesystem.
 | `file_path` | yes | Absolute path to the PDF |
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
+| `copies` | no | Number of copies, 1-20 |
+| `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
+| `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
 
 ### `print_bridge.clear_queue`
 
@@ -293,6 +298,13 @@ Used internally by the blueprint; callable from any automation or script.
 | `filename` | no | Display name for the print job |
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
+| `attachment_filter` | no | Only print if the filename contains this text |
+| `copies` | no | Number of copies, 1-20 |
+| `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
+| `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
+| `sender` | no | Original email sender, used for status replies |
+| `mail_subject` | no | Original email subject, used for mail parameters and reply title |
+| `mail_text` | no | Original plain-text email body, used for mail parameters |
 
 ### `print_bridge.print_email`
 
@@ -304,6 +316,40 @@ Print all PDF attachments from a specific email in your mailbox — on demand, w
 | `imap_entry_id` | no | IMAP config entry ID — defaults to the first configured account |
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
+| `attachment_filter` | no | Only print matching attachment filenames |
+| `copies` | no | Number of copies, 1-20 |
+| `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
+| `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
+
+### Mail print parameters
+
+You can include per-email print settings in the subject or body. These override the integration defaults and blueprint/service values for that email.
+
+Subject form:
+
+```text
+[pb booklet=true duplex=short-edge copies=2 paper=a4 reply=true]
+```
+
+Body form:
+
+```text
+Print-Bridge: attachment="Au Puits"; orientation=landscape; paper=a4
+```
+
+Supported parameters:
+
+| Parameter | Values |
+|---|---|
+| `duplex` / `sides` | `one-sided`, `simplex`, `long-edge`, `short-edge`, `two-sided-long-edge`, `two-sided-short-edge` |
+| `booklet` | `true` / `false` |
+| `copies` | `1` through `20` |
+| `orientation` | `portrait` / `landscape`; booklet jobs always request landscape |
+| `paper` / `media` | `a4`, `letter`, `legal`, or a raw IPP media keyword |
+| `attachment` / `attachment_filter` / `file` | Filename substring to print only matching PDFs |
+| `reply` / `status_reply` | `true` to request a status reply, `false` to suppress one |
+
+Status replies are sent via the configured Home Assistant notify service (for example `notify.smtp`) and include the IPP status code plus the effective printer settings used for each job.
 
 **From Developer Tools → Services:**
 ```yaml
@@ -342,6 +388,8 @@ This event appears in the native HA **Logbook** as a human-readable sentence:
 
 The `sensor.print_bridge_*_job_log` entity stores the last 50 jobs as attributes,
 including timestamp, filename, success/failure, sender, duplex mode, and booklet flag.
+It also stores the effective IPP sides, document format, status code, copies,
+orientation, and media when available.
 
 ---
 
@@ -354,9 +402,10 @@ Mail Server ──IMAP IDLE──► HA IMAP Integration ──imap_content even
                           2. Check: is folder in folder_filter?               │
                           3. Check: schedule day/hour/template open?          │
                           4. For each PDF part → imap.fetch_part ◄────────────┘
-                          5. Booklet? → reorder pages
-                          6. Build IPP/2.0 packet → POST to CUPS
-                          7. Fire print_bridge_job_completed → Logbook
+                          5. Mail parameters? → override duplex/booklet/copies/media
+                          6. Booklet? → reorder pages + request landscape orientation
+                          7. Build IPP/2.0 packet → POST to CUPS/printer
+                          8. Fire print_bridge_job_completed → Logbook/status reply
 ```
 
 ---
@@ -521,7 +570,7 @@ A: `http://<cups-host>:631`. When using the CUPS add-on on HA OS with host netwo
 Pull requests are welcome. Please open an issue first for significant changes.
 
 ```bash
-./venv/bin/pytest tests/ -v   # 85 tests, no external dependencies required
+./venv/bin/pytest tests/ -v   # 146 tests, no external dependencies required
 ```
 
 ---

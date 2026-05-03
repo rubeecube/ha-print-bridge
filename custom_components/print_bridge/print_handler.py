@@ -31,6 +31,8 @@ _TAG_URI = 0x45              # uri
 _TAG_NAME = 0x42             # nameWithoutLanguage
 _TAG_MIME = 0x49             # mimeMediaType
 _TAG_KEYWORD = 0x44          # keyword
+_TAG_INTEGER = 0x21          # integer
+_TAG_ENUM = 0x23             # enum
 
 # IPP group delimiter tags
 _GROUP_OPERATION = b"\x01"
@@ -112,6 +114,17 @@ def _encode_attr(tag: int, name: str, value: str) -> bytes:
     )
 
 
+def _encode_int_attr(tag: int, name: str, value: int) -> bytes:
+    """Encode one IPP integer/enum attribute."""
+    name_b = name.encode()
+    return (
+        struct.pack(">BH", tag, len(name_b))
+        + name_b
+        + struct.pack(">H", 4)
+        + struct.pack(">i", value)
+    )
+
+
 def http_url_to_ipp_uri(http_url: str) -> str:
     """Convert an http(s) endpoint URL to its ipp(s) equivalent.
 
@@ -166,6 +179,9 @@ def build_ipp_packet(
     sides: str,
     document_data: bytes,
     document_format: str = "application/pdf",
+    copies: int | None = None,
+    orientation_requested: int | None = None,
+    media: str | None = None,
 ) -> bytes:
     """Construct a valid IPP 2.0 Print-Job request packet.
 
@@ -177,6 +193,10 @@ def build_ipp_packet(
         sides:        IPP sides keyword, e.g. "two-sided-long-edge".
         document_data: Raw bytes of the document file appended after the IPP header.
         document_format: IPP document-format value for the appended bytes.
+        copies: Optional IPP ``copies`` value.
+        orientation_requested: Optional IPP orientation enum
+                              (3=portrait, 4=landscape).
+        media: Optional IPP media keyword, e.g. ``iso_a4_210x297mm``.
 
     Returns:
         Complete IPP request bytes ready to POST to the printer/CUPS endpoint.
@@ -193,6 +213,14 @@ def build_ipp_packet(
 
     header += _GROUP_JOB
     header += _encode_attr(_TAG_KEYWORD, "sides", sides)
+    if copies is not None:
+        header += _encode_int_attr(_TAG_INTEGER, "copies", copies)
+    if orientation_requested is not None:
+        header += _encode_int_attr(
+            _TAG_ENUM, "orientation-requested", orientation_requested
+        )
+    if media:
+        header += _encode_attr(_TAG_KEYWORD, "media", media)
 
     header += _GROUP_END
 

@@ -160,6 +160,13 @@ class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
                     "sender": j.sender,
                     "duplex": j.duplex,
                     "booklet": j.booklet,
+                    "copies": j.copies,
+                    "orientation": j.orientation,
+                    "media": j.media,
+                    "sides": j.sides,
+                    "document_format": j.document_format,
+                    "status_code": j.status_code,
+                    "status": j.status,
                     "can_retry": j.can_retry,
                     "uid": j.imap_uid,
                 }

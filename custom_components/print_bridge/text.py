@@ -25,12 +25,14 @@ from .const import (
     CONF_SCHEDULE_END,
     CONF_SCHEDULE_START,
     CONF_SCHEDULE_TEMPLATE,
+    CONF_STATUS_REPLY_NOTIFY_SERVICE,
     DEFAULT_EMAIL_ARCHIVE_FOLDER,
     DEFAULT_QUEUE_FOLDER,
     DEFAULT_SCHEDULE_DAYS,
     DEFAULT_SCHEDULE_END,
     DEFAULT_SCHEDULE_START,
     DEFAULT_SCHEDULE_TEMPLATE,
+    DEFAULT_STATUS_REPLY_NOTIFY_SERVICE,
     TEXT_ALLOWED_SENDERS,
     TEXT_BOOKLET_PATTERNS,
     TEXT_EMAIL_ARCHIVE_FOLDER,
@@ -40,6 +42,7 @@ from .const import (
     TEXT_SCHEDULE_END,
     TEXT_SCHEDULE_START,
     TEXT_SCHEDULE_TEMPLATE,
+    TEXT_STATUS_REPLY_NOTIFY_SERVICE,
 )
 from .coordinator import AutoPrintCoordinator
 from .sensor import _device_info
@@ -154,6 +157,14 @@ _TEXTS: tuple[_OptionText, ...] = (
         "mdi:archive-outline",
         lambda value: value.strip(),
         lambda value: str(value or DEFAULT_EMAIL_ARCHIVE_FOLDER),
+    ),
+    _OptionText(
+        CONF_STATUS_REPLY_NOTIFY_SERVICE,
+        TEXT_STATUS_REPLY_NOTIFY_SERVICE,
+        DEFAULT_STATUS_REPLY_NOTIFY_SERVICE,
+        "mdi:email-sync-outline",
+        lambda value: value.strip(),
+        lambda value: str(value or ""),
     ),
     _OptionText(
         CONF_SCHEDULE_START,

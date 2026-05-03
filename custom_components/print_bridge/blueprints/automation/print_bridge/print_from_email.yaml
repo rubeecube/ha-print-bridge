@@ -173,6 +173,9 @@ action:
             duplex: "{{ _effective_duplex }}"
             booklet: "{{ booklet }}"
             attachment_filter: "{{ attachment_filter }}"
+            sender: "{{ trigger.event.data.sender }}"
+            mail_subject: "{{ trigger.event.data.subject }}"
+            mail_text: "{{ trigger.event.data.text | default('') }}"
 
   - alias: "Mark email as seen (optional)"
     if:

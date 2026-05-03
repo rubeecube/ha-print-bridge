@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.19] — 2026-05-03
+
+### Added
+
+- **Mail print parameters** — emails can now declare per-job settings in the subject (`[pb ...]`) or body (`Print-Bridge: ...`) for duplex, booklet, copies, orientation, media, attachment filtering, and status replies.
+- **Status reply emails** — Print Bridge can send a reply through a configured Home Assistant notify service with the result, IPP status code, and effective printer settings used for each job.
+- **Expanded job metadata** — job history and events now include copies, orientation, media, IPP sides, document format, status code, and status text.
+
+### Fixed
+
+- **Booklet landscape output** — booklet jobs now request IPP landscape orientation in addition to booklet page imposition, avoiding printer defaults that rotate imposed sheets back to A4 portrait.
+
+### Changed
+
+- Bumped package metadata to `0.1.19`.
+
+---
+
 ## [0.1.18] — 2026-04-30
 
 ### Added
@@ -216,6 +234,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.19]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.19
 [0.1.18]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.18
 [0.1.17]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.17
 [0.1.16]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.16
