@@ -77,6 +77,23 @@ def test_ipp_packet_contains_sides_attribute():
     assert b"two-sided-long-edge" in pkt
 
 
+def test_ipp_packet_can_include_copies_orientation_and_media():
+    pkt = build_ipp_packet(
+        PRINTER,
+        "booklet.pdf",
+        "two-sided-short-edge",
+        PDF_STUB,
+        copies=2,
+        orientation_requested=4,
+        media="iso_a4_210x297mm",
+    )
+
+    assert _ipp_attr(0x21, "copies", struct.pack(">i", 2)) in pkt
+    assert _ipp_attr(0x23, "orientation-requested", struct.pack(">i", 4)) in pkt
+    assert b"media" in pkt
+    assert b"iso_a4_210x297mm" in pkt
+
+
 def test_ipp_packet_ends_with_pdf_data():
     pkt = build_ipp_packet(PRINTER, "test.pdf", "one-sided", PDF_STUB)
     assert pkt.endswith(PDF_STUB)

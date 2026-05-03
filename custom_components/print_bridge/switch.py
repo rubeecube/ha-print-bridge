@@ -16,16 +16,19 @@ from .const import (
     CONF_NOTIFY_ON_FAILURE,
     CONF_NOTIFY_ON_SUCCESS,
     CONF_SCHEDULE_ENABLED,
+    CONF_STATUS_REPLY_ENABLED,
     DEFAULT_AUTO_DELETE,
     DEFAULT_AUTO_PRINT_ENABLED,
     DEFAULT_NOTIFY_ON_FAILURE,
     DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_SCHEDULE_ENABLED,
+    DEFAULT_STATUS_REPLY_ENABLED,
     SWITCH_AUTO_DELETE,
     SWITCH_AUTO_PRINT_ENABLED,
     SWITCH_NOTIFY_ON_FAILURE,
     SWITCH_NOTIFY_ON_SUCCESS,
     SWITCH_SCHEDULE_ENABLED,
+    SWITCH_STATUS_REPLY_ENABLED,
 )
 from .coordinator import AutoPrintCoordinator
 from .sensor import _device_info
@@ -63,6 +66,12 @@ _SWITCHES: tuple[_OptionSwitch, ...] = (
         SWITCH_NOTIFY_ON_SUCCESS,
         DEFAULT_NOTIFY_ON_SUCCESS,
         "mdi:check-circle-outline",
+    ),
+    _OptionSwitch(
+        CONF_STATUS_REPLY_ENABLED,
+        SWITCH_STATUS_REPLY_ENABLED,
+        DEFAULT_STATUS_REPLY_ENABLED,
+        "mdi:email-sync-outline",
     ),
     _OptionSwitch(
         CONF_SCHEDULE_ENABLED,

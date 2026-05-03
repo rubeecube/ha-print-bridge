@@ -43,6 +43,8 @@ from .const import (
     CONF_SCHEDULE_END,
     CONF_SCHEDULE_START,
     CONF_SCHEDULE_TEMPLATE,
+    CONF_STATUS_REPLY_ENABLED,
+    CONF_STATUS_REPLY_NOTIFY_SERVICE,
     DEFAULT_AUTO_DELETE,
     DEFAULT_CUPS_URL,
     DEFAULT_DUPLEX_MODE,
@@ -57,6 +59,8 @@ from .const import (
     DEFAULT_SCHEDULE_END,
     DEFAULT_SCHEDULE_START,
     DEFAULT_SCHEDULE_TEMPLATE,
+    DEFAULT_STATUS_REPLY_ENABLED,
+    DEFAULT_STATUS_REPLY_NOTIFY_SERVICE,
     DOMAIN,
     DUPLEX_MODES,
     EMAIL_ACTIONS,
@@ -665,6 +669,19 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 CONF_NOTIFY_ON_SUCCESS,
                 default=options.get(CONF_NOTIFY_ON_SUCCESS, DEFAULT_NOTIFY_ON_SUCCESS),
             ): bool,
+            vol.Required(
+                CONF_STATUS_REPLY_ENABLED,
+                default=options.get(
+                    CONF_STATUS_REPLY_ENABLED, DEFAULT_STATUS_REPLY_ENABLED
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_STATUS_REPLY_NOTIFY_SERVICE,
+                default=options.get(
+                    CONF_STATUS_REPLY_NOTIFY_SERVICE,
+                    DEFAULT_STATUS_REPLY_NOTIFY_SERVICE,
+                ),
+            ): str,
             vol.Required(
                 CONF_SCHEDULE_ENABLED,
                 default=options.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED),

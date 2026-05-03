@@ -43,6 +43,38 @@ print_email:
       default: false
       selector:
         boolean:
+    attachment_filter:
+      name: Attachment Filter
+      description: Optional filename substring; only matching PDF attachments print.
+      required: false
+      selector:
+        text:
+    copies:
+      name: Copies
+      description: Number of copies to request from the printer.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: box
+    orientation:
+      name: Orientation
+      description: Request portrait or landscape output. Booklet jobs always request landscape.
+      required: false
+      selector:
+        select:
+          options:
+            - label: "Portrait"
+              value: "portrait"
+            - label: "Landscape"
+              value: "landscape"
+    media:
+      name: Paper Size / Media
+      description: IPP media keyword, such as iso_a4_210x297mm or na_letter_8.5x11in.
+      required: false
+      selector:
+        text:
 
 print_file:
   name: Print File
@@ -81,6 +113,32 @@ print_file:
       default: false
       selector:
         boolean:
+    copies:
+      name: Copies
+      description: Number of copies to request from the printer.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: box
+    orientation:
+      name: Orientation
+      description: Request portrait or landscape output. Booklet jobs always request landscape.
+      required: false
+      selector:
+        select:
+          options:
+            - label: "Portrait"
+              value: "portrait"
+            - label: "Landscape"
+              value: "landscape"
+    media:
+      name: Paper Size / Media
+      description: IPP media keyword, such as iso_a4_210x297mm or na_letter_8.5x11in.
+      required: false
+      selector:
+        text:
 
 clear_queue:
   name: Clear Print Queue
@@ -215,3 +273,53 @@ process_imap_part:
       default: false
       selector:
         boolean:
+    attachment_filter:
+      name: Attachment Filter
+      description: Optional filename substring; only matching PDF attachments print.
+      required: false
+      selector:
+        text:
+    copies:
+      name: Copies
+      description: Number of copies to request from the printer.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: box
+    orientation:
+      name: Orientation
+      description: Request portrait or landscape output. Booklet jobs always request landscape.
+      required: false
+      selector:
+        select:
+          options:
+            - label: "Portrait"
+              value: "portrait"
+            - label: "Landscape"
+              value: "landscape"
+    media:
+      name: Paper Size / Media
+      description: IPP media keyword, such as iso_a4_210x297mm or na_letter_8.5x11in.
+      required: false
+      selector:
+        text:
+    sender:
+      name: Sender
+      description: Original email sender; used for optional status replies.
+      required: false
+      selector:
+        text:
+    mail_subject:
+      name: Mail Subject
+      description: Original email subject; used for mail print parameters and reply subject.
+      required: false
+      selector:
+        text:
+    mail_text:
+      name: Mail Text
+      description: Original plain-text email body; used for mail print parameters.
+      required: false
+      selector:
+        text:

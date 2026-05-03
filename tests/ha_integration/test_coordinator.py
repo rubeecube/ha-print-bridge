@@ -34,6 +34,7 @@ from custom_components.print_bridge.coordinator import (
     PrintJobResult,
     _decode_mime_filename,
 )
+from custom_components.print_bridge.mail_params import parse_mail_print_parameters
 
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
 
@@ -70,10 +71,19 @@ def _event(
     parts: dict | None = None,
     entry_id: str = "imap_entry_1",
     uid: str = "99",
+    subject: str = "",
+    text: str = "",
 ) -> Event:
     return Event(
         "imap_content",
-        {"sender": sender, "entry_id": entry_id, "uid": uid, "parts": parts or {}},
+        {
+            "sender": sender,
+            "entry_id": entry_id,
+            "uid": uid,
+            "subject": subject,
+            "text": text,
+            "parts": parts or {},
+        },
     )
 
 
@@ -191,6 +201,11 @@ async def test_pdf_event_triggers_fetch_and_print(hass: HomeAssistant) -> None:
     mock_fetch.assert_called_once_with(
         entry_id="imap_entry_1", uid="99", part_key="1",
         filename="document.pdf", sender="sender@example.com",
+        duplex_override=None,
+        booklet_override=None,
+        copies=None,
+        orientation=None,
+        media=None,
     )
 
 
@@ -220,6 +235,62 @@ async def test_pdf_event_records_failure(hass: HomeAssistant) -> None:
         await coordinator.async_handle_imap_event(_event(parts=_pdf_parts()))
 
     assert coordinator._job_history[0].success is False
+
+
+async def test_mail_params_override_imap_event_print_settings(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+    success = PrintJobResult(filename="doc.pdf", success=True)
+
+    with (
+        patch.object(coordinator, "_async_fetch_and_print",
+                     new=AsyncMock(return_value=success)) as mock_fetch,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        await coordinator.async_handle_imap_event(
+            _event(
+                parts=_pdf_parts("Au Puits booklet.pdf"),
+                subject="[pb duplex=short-edge copies=2]",
+                text="Print-Bridge: booklet=true; paper=a4; orientation=landscape",
+            )
+        )
+
+    mock_fetch.assert_called_once_with(
+        entry_id="imap_entry_1",
+        uid="99",
+        part_key="1",
+        filename="Au Puits booklet.pdf",
+        sender="sender@example.com",
+        duplex_override="two-sided-short-edge",
+        booklet_override=True,
+        copies=2,
+        orientation="landscape",
+        media="iso_a4_210x297mm",
+    )
+
+
+async def test_mail_attachment_filter_skips_non_matching_pdfs(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+
+    parts = {
+        "1": {"content_type": "application/pdf", "filename": "invoice.pdf"},
+        "2": {"content_type": "application/pdf", "filename": "Au Puits.pdf"},
+    }
+
+    with (
+        patch.object(coordinator, "_async_fetch_and_print",
+                     new=AsyncMock(return_value=PrintJobResult(filename="Au Puits.pdf", success=True))) as mock_fetch,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        await coordinator.async_handle_imap_event(
+            _event(parts=parts, text="PB: attachment='Au Puits'")
+        )
+
+    mock_fetch.assert_called_once()
+    assert mock_fetch.call_args.kwargs["part_key"] == "2"
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +585,54 @@ async def test_post_process_skipped_when_all_jobs_queued(hass: HomeAssistant) ->
     mock_pp.assert_not_called()  # must NOT run — email not yet printed
 
 
+async def test_status_reply_uses_configured_notify_service(
+    hass: HomeAssistant,
+) -> None:
+    opts = {
+        **MOCK_OPTIONS,
+        "status_reply_enabled": True,
+        "status_reply_notify_service": "notify.smtp",
+    }
+    _, coordinator = await _setup_coordinator(hass, options=opts)
+    captured: dict = {}
+
+    async def _notify(call: ServiceCall) -> None:
+        captured.update(call.data)
+
+    hass.services.async_register("notify", "smtp", _notify)
+
+    await coordinator._async_send_status_reply(
+        sender="sender@example.com",
+        subject="Weekly PDF",
+        results=[
+            PrintJobResult(
+                filename="booklet.pdf",
+                success=True,
+                duplex="two-sided-short-edge",
+                booklet=True,
+                copies=2,
+                orientation="landscape",
+                media="iso_a4_210x297mm",
+                sides="two-sided-short-edge",
+                document_format="application/pdf",
+                status_code="IPP 0x0000",
+                status="successful-ok",
+            )
+        ],
+        params=parse_mail_print_parameters(
+            "[pb copies=2]",
+            "Print-Bridge: booklet=true; paper=a4; reply=true",
+        ),
+    )
+
+    assert captured["target"] == ["sender@example.com"]
+    assert captured["title"] == "Re: Weekly PDF"
+    assert "Status code: IPP 0x0000" in captured["message"]
+    assert "Booklet: yes" in captured["message"]
+    assert "Orientation: landscape" in captured["message"]
+    assert "Media: iso_a4_210x297mm" in captured["message"]
+
+
 # ---------------------------------------------------------------------------
 # Retry
 # ---------------------------------------------------------------------------
@@ -555,6 +674,9 @@ async def test_retry_job_refetches_and_prints(hass: HomeAssistant) -> None:
         duplex_override=None,
         booklet_override=False,
         sender="sender@example.com",
+        copies=None,
+        orientation=None,
+        media=None,
     )
 
 
@@ -705,6 +827,8 @@ async def test_direct_printer_timeout_after_post_is_treated_as_submitted(
     assert result.error.startswith("submitted; TimeoutError")
     assert "http://printer.local:631/ipp/print" in result.error
     mock_booklet.assert_called_once_with(_FAKE_PDF)
+    packet = mock_session.post.call_args.kwargs["data"]
+    assert _ipp_attr(0x23, "orientation-requested", struct.pack(">i", 4)) in packet
 
 
 def test_decode_mime_filename_removes_windows_1255_direction_marks() -> None:

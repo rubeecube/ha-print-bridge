@@ -48,6 +48,9 @@ _PRINT_FILE_SCHEMA = vol.Schema(
         vol.Required(FIELD_FILE_PATH): cv.string,
         vol.Optional(FIELD_DUPLEX): vol.In(DUPLEX_MODES),
         vol.Optional(FIELD_BOOKLET, default=False): cv.boolean,
+        vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
+        vol.Optional("orientation"): vol.In(("portrait", "landscape")),
+        vol.Optional("media"): cv.string,
     }
 )
 
@@ -60,6 +63,12 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
         vol.Optional("duplex"): vol.In(DUPLEX_MODES),
         vol.Optional("booklet", default=False): cv.boolean,
         vol.Optional("attachment_filter"): cv.string,
+        vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
+        vol.Optional("orientation"): vol.In(("portrait", "landscape")),
+        vol.Optional("media"): cv.string,
+        vol.Optional("sender"): cv.string,
+        vol.Optional("mail_subject"): cv.string,
+        vol.Optional("mail_text"): cv.string,
     }
 )
 
@@ -234,9 +243,19 @@ def _register_services(hass: HomeAssistant) -> None:
         file_path: str = call.data[FIELD_FILE_PATH]
         duplex: str | None = call.data.get(FIELD_DUPLEX)
         booklet: bool = call.data.get(FIELD_BOOKLET, False)
+        copies: int | None = call.data.get("copies")
+        orientation: str | None = call.data.get("orientation")
+        media: str | None = call.data.get("media")
 
         coordinator = _get_any_coordinator(hass).selected_printer_coordinator
-        result = await coordinator.async_print_file(file_path, duplex, booklet)
+        result = await coordinator.async_print_file(
+            file_path,
+            duplex,
+            booklet,
+            copies=copies,
+            orientation=orientation,
+            media=media,
+        )
         if not result.success:
             raise HomeAssistantError(
                 f"Print job failed for '{result.filename}': {result.error}"
@@ -258,6 +277,12 @@ def _register_services(hass: HomeAssistant) -> None:
             duplex_override=call.data.get("duplex"),
             booklet_override=call.data.get("booklet", False) or None,
             attachment_filter=call.data.get("attachment_filter"),
+            copies=call.data.get("copies"),
+            orientation=call.data.get("orientation"),
+            media=call.data.get("media"),
+            sender=call.data.get("sender"),
+            mail_subject=call.data.get("mail_subject"),
+            mail_text=call.data.get("mail_text"),
         )
         if not result.success:
             raise HomeAssistantError(
@@ -382,6 +407,10 @@ def _register_services(hass: HomeAssistant) -> None:
         imap_entry_id: str | None = call.data.get("imap_entry_id")
         duplex: str | None = call.data.get("duplex")
         booklet: bool = call.data.get("booklet", False)
+        attachment_filter: str | None = call.data.get("attachment_filter")
+        copies: int | None = call.data.get("copies")
+        orientation: str | None = call.data.get("orientation")
+        media: str | None = call.data.get("media")
 
         controller = _get_any_coordinator(hass)
         coordinator = controller.selected_printer_coordinator
@@ -390,6 +419,10 @@ def _register_services(hass: HomeAssistant) -> None:
             imap_entry_id=imap_entry_id or controller.selected_imap_entry_id,
             duplex=duplex,
             booklet=booklet,
+            attachment_filter=attachment_filter,
+            copies=copies,
+            orientation=orientation,
+            media=media,
         )
 
     hass.services.async_register(
@@ -402,6 +435,10 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("imap_entry_id"): cv.string,
                 vol.Optional("duplex"): vol.In(DUPLEX_MODES),
                 vol.Optional("booklet", default=False): cv.boolean,
+                vol.Optional("attachment_filter"): cv.string,
+                vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
+                vol.Optional("orientation"): vol.In(("portrait", "landscape")),
+                vol.Optional("media"): cv.string,
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,

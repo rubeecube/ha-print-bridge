@@ -54,6 +54,8 @@ from .const import (
     CONF_SCHEDULE_END,
     CONF_SCHEDULE_START,
     CONF_SCHEDULE_TEMPLATE,
+    CONF_STATUS_REPLY_ENABLED,
+    CONF_STATUS_REPLY_NOTIFY_SERVICE,
     DEFAULT_AUTO_DELETE,
     DEFAULT_DUPLEX_MODE,
     DEFAULT_EMAIL_ACTION,
@@ -67,11 +69,14 @@ from .const import (
     DEFAULT_SCHEDULE_END,
     DEFAULT_SCHEDULE_START,
     DEFAULT_SCHEDULE_TEMPLATE,
+    DEFAULT_STATUS_REPLY_ENABLED,
+    DEFAULT_STATUS_REPLY_NOTIFY_SERVICE,
     DOMAIN,
     EVENT_JOB_COMPLETED,
     SCHEDULE_DAYS,
 )
 from .imap_checker import EmailPreview, preview_mailbox
+from .mail_params import MailPrintParameters, parse_mail_print_parameters
 from .print_handler import (
     build_ipp_packet,
     build_get_printer_attributes_packet,
@@ -81,6 +86,7 @@ from .print_handler import (
     ipp_response_succeeded,
     is_booklet_job,
     parse_ipp_attributes,
+    parse_ipp_response_status,
     sanitize_ipp_job_name,
 )
 from .raster_converter import convert_pdf_to_jpeg, convert_pdf_to_pwg_raster
@@ -117,6 +123,7 @@ _SCHEDULE_DAY_ALIASES = {
     "7": "sun",
 }
 _FALSE_TEMPLATE_VALUES = {"", "0", "false", "no", "off", "none", "unknown", "unavailable"}
+_ORIENTATION_ENUMS = {"portrait": 3, "landscape": 4}
 
 
 def _decode_mime_filename(value: str) -> str:
@@ -152,6 +159,15 @@ def _normalise_email_address(value: str) -> str:
     """Return a lower-case bare email address from an IMAP sender string."""
     _name, address = parseaddr(value or "")
     return (address or value or "").strip().lower()
+
+
+def _split_notify_service(value: str) -> tuple[str, str]:
+    """Return (domain, service) for a notify service reference."""
+    service_ref = value.strip()
+    if "." in service_ref:
+        domain, service = service_ref.split(".", 1)
+        return domain.strip(), service.strip()
+    return "notify", service_ref
 
 
 def _is_pdf_part(part_info: dict[str, Any]) -> bool:
@@ -197,6 +213,15 @@ def _first_or_none(values: list[str]) -> str | None:
     return values[0] if values else None
 
 
+def _orientation_for_job(booklet: bool, orientation: str | None) -> str | None:
+    """Return the effective job orientation keyword."""
+    if booklet:
+        return "landscape"
+    if orientation in _ORIENTATION_ENUMS:
+        return orientation
+    return None
+
+
 def _resolution_dpi(values: list[str]) -> int:
     for value in values:
         match = re.match(r"^(\d+)(?:x\d+)?dpi$", value)
@@ -215,6 +240,13 @@ class PrintJobResult:
     sender: str | None = None
     duplex: str | None = None
     booklet: bool = False
+    copies: int | None = None
+    orientation: str | None = None
+    media: str | None = None
+    sides: str | None = None
+    document_format: str | None = None
+    status_code: str | None = None
+    status: str | None = None
     timestamp: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
@@ -299,6 +331,11 @@ class PendingJob:
     sender: str | None = None
     duplex_override: str | None = None
     booklet_override: bool | None = None
+    copies: int | None = None
+    orientation: str | None = None
+    media: str | None = None
+    mail_subject: str = ""
+    mail_params: MailPrintParameters = field(default_factory=MailPrintParameters)
     queued_at: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
@@ -309,6 +346,11 @@ class PendingJob:
             "sender": self.sender,
             "queued_at": self.queued_at,
             "uid": self.uid,
+            "duplex": self.duplex_override,
+            "booklet": self.booklet_override,
+            "copies": self.copies,
+            "orientation": self.orientation,
+            "media": self.media,
         }
 
 
@@ -424,6 +466,24 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     def _auto_print_enabled(self) -> bool:
         """True if the coordinator should automatically print on imap_content events."""
         return bool(self._entry.options.get(CONF_AUTO_PRINT_ENABLED, DEFAULT_AUTO_PRINT_ENABLED))
+
+    @property
+    def _status_reply_enabled(self) -> bool:
+        return bool(
+            self._entry.options.get(
+                CONF_STATUS_REPLY_ENABLED, DEFAULT_STATUS_REPLY_ENABLED
+            )
+        )
+
+    @property
+    def _status_reply_notify_service(self) -> str:
+        return str(
+            self._entry.options.get(
+                CONF_STATUS_REPLY_NOTIFY_SERVICE,
+                DEFAULT_STATUS_REPLY_NOTIFY_SERVICE,
+            )
+            or ""
+        ).strip()
 
     @property
     def _schedule_enabled(self) -> bool:
@@ -610,9 +670,15 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         parts: dict[str, dict[str, Any]] = event.data.get("parts", {})
         entry_id: str = event.data.get("entry_id", "")
         uid: str = str(event.data.get("uid", ""))
+        subject: str = str(event.data.get("subject", ""))
+        mail_params = parse_mail_print_parameters(
+            subject,
+            str(event.data.get("text", "")),
+        )
 
         had_pdf = False
         actually_printed = False  # tracks whether any part was immediately printed
+        results: list[PrintJobResult] = []
         for part_key, part_info in parts.items():
             if not _is_pdf_part(part_info):
                 continue
@@ -623,6 +689,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 or part_info.get("file_name")
                 or f"document_{part_key}.pdf"
             )
+            if mail_params.attachment_filter:
+                if mail_params.attachment_filter.lower() not in filename.lower():
+                    continue
 
             # Schedule check — queue the job if outside the allowed window.
             if not self._is_within_schedule():
@@ -632,8 +701,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     part_key=part_key,
                     filename=filename,
                     sender=sender,
-                    duplex_override=None,
-                    booklet_override=None,
+                    duplex_override=mail_params.duplex,
+                    booklet_override=mail_params.booklet,
+                    copies=mail_params.copies,
+                    orientation=mail_params.orientation,
+                    media=mail_params.media,
+                    mail_subject=subject,
+                    mail_params=mail_params,
                 )
                 self._pending_jobs.append(pending)
                 logger.info(
@@ -665,7 +739,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 part_key=part_key,
                 filename=filename,
                 sender=sender,
+                duplex_override=mail_params.duplex,
+                booklet_override=mail_params.booklet,
+                copies=mail_params.copies,
+                orientation=mail_params.orientation,
+                media=mail_params.media,
             )
+            results.append(result)
             self._record_job(result)
             await self._async_notify_job(result)
 
@@ -674,6 +754,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         # to async_flush_pending (to avoid deleting the email before printing).
         if actually_printed:
             await self._async_post_process_email(entry_id, uid)
+            await self._async_send_status_reply(
+                sender=sender,
+                subject=subject,
+                results=results,
+                params=mail_params,
+            )
 
         if parts:
             await self.async_request_refresh()
@@ -687,6 +773,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         duplex_override: str | None = None,
         booklet_override: bool | None = None,
         sender: str | None = None,
+        copies: int | None = None,
+        orientation: str | None = None,
+        media: str | None = None,
     ) -> PrintJobResult:
         """Fetch one attachment via imap.fetch_part and print it.
 
@@ -735,7 +824,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             else is_booklet_job(filename, self._booklet_patterns)
         )
         result = await self.async_send_print_job(
-            filename, pdf_bytes, effective_duplex, effective_booklet
+            filename,
+            pdf_bytes,
+            effective_duplex,
+            effective_booklet,
+            copies=copies,
+            orientation=orientation,
+            media=media,
         )
         # Attach IMAP identifiers for future retry.
         result.sender = sender
@@ -778,6 +873,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             duplex_override=duplex_override or job.duplex,
             booklet_override=booklet_override if booklet_override is not None else job.booklet,
             sender=job.sender,
+            copies=job.copies,
+            orientation=job.orientation,
+            media=job.media,
         )
         self._record_job(result)
         await self._async_notify_job(result)
@@ -873,6 +971,91 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         except Exception:
             logger.warning("Could not send notification for job '%s'", result.filename)
 
+    async def _async_send_status_reply(
+        self,
+        *,
+        sender: str | None,
+        subject: str,
+        results: list[PrintJobResult],
+        params: MailPrintParameters,
+    ) -> None:
+        """Send a status email through a configured HA notify service."""
+        if params.reply is False:
+            return
+        if not (self._status_reply_enabled or params.reply is True):
+            return
+        if not sender:
+            logger.warning("Cannot send print status reply: sender address is empty")
+            return
+
+        service_ref = self._status_reply_notify_service
+        if not service_ref:
+            logger.warning(
+                "Cannot send print status reply to %s: status reply notify service is not configured",
+                sender,
+            )
+            return
+
+        domain, service = _split_notify_service(service_ref)
+        message = self._format_status_reply(results, params)
+        try:
+            await self.hass.services.async_call(
+                domain,
+                service,
+                {
+                    "title": f"Re: {subject or 'Print Bridge status'}",
+                    "message": message,
+                    "target": [sender],
+                },
+                blocking=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Status reply via %s.%s to %s failed: %s",
+                domain,
+                service,
+                sender,
+                exc,
+            )
+
+    def _format_status_reply(
+        self, results: list[PrintJobResult], params: MailPrintParameters
+    ) -> str:
+        """Build a plain-text print status reply body."""
+        lines = [
+            "Print Bridge status",
+            "",
+            f"Printer: {self._printer_name or 'Direct IPP printer'}",
+            f"Endpoint: {self._ipp_endpoint}",
+            f"Printer URI: {self._printer_uri}",
+        ]
+        if params.has_values:
+            lines.append(
+                "Mail parameters: "
+                + ", ".join(f"{key}={value}" for key, value in params.as_dict().items())
+            )
+        lines.append("")
+
+        for index, result in enumerate(results, start=1):
+            lines.extend(
+                [
+                    f"Job {index}: {result.filename}",
+                    f"Result: {'success' if result.success else 'failed'}",
+                    f"Status code: {result.status_code or 'n/a'}",
+                    f"Status: {result.status or result.error or 'accepted'}",
+                    f"Document format: {result.document_format or 'application/pdf'}",
+                    f"Duplex: {result.duplex or 'default'}",
+                    f"IPP sides: {result.sides or 'default'}",
+                    f"Booklet: {'yes' if result.booklet else 'no'}",
+                    f"Copies: {result.copies or 1}",
+                    f"Orientation: {result.orientation or 'default'}",
+                    f"Media: {result.media or 'default'}",
+                    f"Timestamp: {result.timestamp}",
+                    "",
+                ]
+            )
+        return "\n".join(lines).strip()
+
     async def async_process_imap_part(
         self,
         entry_id: str,
@@ -883,23 +1066,38 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         booklet_override: bool | None = None,
         sender: str | None = None,
         attachment_filter: str | None = None,
+        copies: int | None = None,
+        orientation: str | None = None,
+        media: str | None = None,
+        mail_subject: str | None = None,
+        mail_text: str | None = None,
     ) -> PrintJobResult:
         """Fetch one IMAP attachment and print it (called by the service)."""
+        mail_params = parse_mail_print_parameters(mail_subject or "", mail_text or "")
+        effective_duplex_override = mail_params.duplex or duplex_override
+        effective_booklet_override = (
+            mail_params.booklet if mail_params.booklet is not None else booklet_override
+        )
+        effective_attachment_filter = mail_params.attachment_filter or attachment_filter
+        effective_copies = mail_params.copies or copies
+        effective_orientation = mail_params.orientation or orientation
+        effective_media = mail_params.media or media
+
         # Decode RFC 2047 MIME-encoded filenames that arrive from the IMAP event.
         effective_filename = _decode_mime_filename(
             filename or f"attachment_{part_key}.pdf"
         )
 
         # Skip this attachment if it doesn't match the caller's name filter.
-        if attachment_filter and attachment_filter.strip():
-            if attachment_filter.strip().lower() not in effective_filename.lower():
+        if effective_attachment_filter and effective_attachment_filter.strip():
+            if effective_attachment_filter.strip().lower() not in effective_filename.lower():
                 logger.debug(
                     "Skipping attachment '%s' — does not match filter '%s'",
-                    effective_filename, attachment_filter,
+                    effective_filename, effective_attachment_filter,
                 )
                 return PrintJobResult(
                     filename=effective_filename, success=True,
-                    error=f"skipped: does not match filter '{attachment_filter}'",
+                    error=f"skipped: does not match filter '{effective_attachment_filter}'",
                 )
 
         # Deduplication: if another blueprint already printed this exact attachment
@@ -930,20 +1128,31 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             uid=uid,
             part_key=part_key,
             filename=effective_filename,
-            duplex_override=duplex_override,
-            booklet_override=booklet_override,
+            duplex_override=effective_duplex_override,
+            booklet_override=effective_booklet_override,
             sender=sender,
+            copies=effective_copies,
+            orientation=effective_orientation,
+            media=effective_media,
         )
         self._record_job(result)
+        await self._async_send_status_reply(
+            sender=sender,
+            subject=mail_subject or "",
+            results=[result],
+            params=mail_params,
+        )
         await self.async_request_refresh()
         return result
 
     async def async_print_file(
-
         self,
         file_path: str,
         duplex_mode: str | None = None,
         force_booklet: bool = False,
+        copies: int | None = None,
+        orientation: str | None = None,
+        media: str | None = None,
     ) -> PrintJobResult:
         """Print a PDF file from disk and return the result."""
         filename = os.path.basename(file_path)
@@ -963,7 +1172,15 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             self._record_job(result)
             return result
 
-        result = await self.async_send_print_job(filename, pdf_data, effective_duplex, booklet)
+        result = await self.async_send_print_job(
+            filename,
+            pdf_data,
+            effective_duplex,
+            booklet,
+            copies=copies,
+            orientation=orientation,
+            media=media,
+        )
         self._record_job(result)
         await self.async_request_refresh()
         return result
@@ -974,6 +1191,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         imap_entry_id: str | None = None,
         duplex: str | None = None,
         booklet: bool = False,
+        attachment_filter: str | None = None,
+        copies: int | None = None,
+        orientation: str | None = None,
+        media: str | None = None,
     ) -> dict:
         """Print all PDF attachments from one IMAP email by UID."""
         from homeassistant.exceptions import HomeAssistantError
@@ -999,6 +1220,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 f"Failed to fetch email uid={uid}: {exc}"
             ) from exc
 
+        subject = str(fetch_result.get("subject", ""))
+        body_text = str(fetch_result.get("text", ""))
+        sender = _normalise_email_address(str(fetch_result.get("sender", "")))
         parts: dict = fetch_result.get("parts", {})
         pdf_parts = {
             k: v for k, v in parts.items()
@@ -1025,6 +1249,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename,
                 duplex_override=duplex,
                 booklet_override=booklet or None,
+                sender=sender,
+                attachment_filter=attachment_filter,
+                copies=copies,
+                orientation=orientation,
+                media=media,
+                mail_subject=subject,
+                mail_text=body_text,
             )
             results.append({
                 "filename": result.filename,
@@ -1287,10 +1518,24 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return capabilities
 
     async def async_send_print_job(
-        self, filename: str, pdf_data: bytes, duplex_mode: str, booklet: bool
+        self,
+        filename: str,
+        pdf_data: bytes,
+        duplex_mode: str,
+        booklet: bool,
+        copies: int | None = None,
+        orientation: str | None = None,
+        media: str | None = None,
     ) -> PrintJobResult:
         """Build an IPP packet and POST it to CUPS."""
         filename = sanitize_ipp_job_name(filename)
+        effective_orientation = _orientation_for_job(booklet, orientation)
+        orientation_requested = (
+            _ORIENTATION_ENUMS[effective_orientation]
+            if effective_orientation is not None
+            else None
+        )
+        effective_copies = copies or 1
         if booklet:
             try:
                 pdf_data = await self.hass.async_add_executor_job(
@@ -1302,6 +1547,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 return PrintJobResult(
                     filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
+                    copies=effective_copies, orientation=effective_orientation,
+                    media=media, status=error,
                 )
 
         sides = determine_sides(duplex_mode, booklet)
@@ -1315,6 +1562,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return PrintJobResult(
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
+                copies=effective_copies, orientation=effective_orientation,
+                media=media, sides=sides, status=error,
             )
 
         packet = build_ipp_packet(
@@ -1323,6 +1572,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             sides,
             document_data,
             document_format=document_format,
+            copies=copies,
+            orientation_requested=orientation_requested,
+            media=media,
         )
 
         session = async_get_clientsession(self.hass)
@@ -1344,6 +1596,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     return PrintJobResult(
                         filename=filename, success=False, error=error,
                         duplex=duplex_mode, booklet=booklet,
+                        copies=effective_copies, orientation=effective_orientation,
+                        media=media, sides=sides, document_format=document_format,
+                        status_code=error, status=error,
                     )
 
                 if body_prefix.startswith(b"<!doctype html") or body_prefix.startswith(b"<html"):
@@ -1352,9 +1607,16 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     return PrintJobResult(
                         filename=filename, success=False, error=error,
                         duplex=duplex_mode, booklet=booklet,
+                        copies=effective_copies, orientation=effective_orientation,
+                        media=media, sides=sides, document_format=document_format,
+                        status_code="HTTP 200", status=error,
                     )
 
-                ipp_ok, ipp_status = ipp_response_succeeded(body)
+                status_code, ipp_status = parse_ipp_response_status(body)
+                ipp_ok = status_code is not None and status_code < 0x0100
+                ipp_status_code = (
+                    f"IPP 0x{status_code:04x}" if status_code is not None else None
+                )
                 if ipp_ok:
                     logger.debug(
                         "Print job accepted for '%s' (format=%s, sides=%s, %s)",
@@ -1363,6 +1625,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     return PrintJobResult(
                         filename=filename, success=True,
                         duplex=duplex_mode, booklet=booklet,
+                        copies=effective_copies, orientation=effective_orientation,
+                        media=media, sides=sides, document_format=document_format,
+                        status_code=ipp_status_code, status=ipp_status,
                     )
 
                 error = ipp_status
@@ -1370,6 +1635,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 return PrintJobResult(
                     filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
+                    copies=effective_copies, orientation=effective_orientation,
+                    media=media, sides=sides, document_format=document_format,
+                    status_code=ipp_status_code, status=ipp_status,
                 )
 
         except asyncio.TimeoutError as exc:
@@ -1391,11 +1659,21 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     error=f"submitted; {error}",
                     duplex=duplex_mode,
                     booklet=booklet,
+                    copies=effective_copies,
+                    orientation=effective_orientation,
+                    media=media,
+                    sides=sides,
+                    document_format=document_format,
+                    status_code="timeout-submitted",
+                    status=error,
                 )
             logger.error("Network error printing '%s': %s", filename, error)
             return PrintJobResult(
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
+                copies=effective_copies, orientation=effective_orientation,
+                media=media, sides=sides, document_format=document_format,
+                status_code="timeout", status=error,
             )
         except aiohttp.ClientError as exc:
             error = (
@@ -1406,6 +1684,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return PrintJobResult(
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
+                copies=effective_copies, orientation=effective_orientation,
+                media=media, sides=sides, document_format=document_format,
+                status_code="network-error", status=error,
             )
 
     def _select_document_format(self, document_formats: list[str]) -> tuple[str, bool]:
@@ -1482,11 +1763,20 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 duplex_override=job.duplex_override,
                 booklet_override=job.booklet_override,
                 sender=job.sender,
+                copies=job.copies,
+                orientation=job.orientation,
+                media=job.media,
             )
             self._record_job(result)
             await self._async_notify_job(result)
             # Apply configured IMAP action now that the job has been printed.
             await self._async_post_process_email(job.entry_id, job.uid)
+            await self._async_send_status_reply(
+                sender=job.sender,
+                subject=job.mail_subject,
+                results=[result],
+                params=job.mail_params,
+            )
 
         await self.async_request_refresh()
         return len(jobs)
@@ -1563,6 +1853,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "sender": result.sender,
                 "duplex": result.duplex,
                 "booklet": result.booklet,
+                "copies": result.copies,
+                "orientation": result.orientation,
+                "media": result.media,
+                "sides": result.sides,
+                "document_format": result.document_format,
+                "status_code": result.status_code,
+                "status": result.status,
                 "timestamp": result.timestamp,
             },
         )
