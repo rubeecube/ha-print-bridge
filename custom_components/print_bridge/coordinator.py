@@ -49,6 +49,7 @@ from .const import (
     CONF_NOTIFY_ON_SUCCESS,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
+    CONF_RASTER_DPI,
     CONF_AUTO_PRINT_ENABLED,
     CONF_SELECTED_IMAP_ENTRY_ID,
     CONF_SELECTED_PRINTER_ENTRY_ID,
@@ -66,6 +67,7 @@ from .const import (
     DEFAULT_NOTIFY_ON_FAILURE,
     DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_QUEUE_FOLDER,
+    DEFAULT_RASTER_DPI,
     DEFAULT_AUTO_PRINT_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
     DEFAULT_SCHEDULE_DAYS,
@@ -287,12 +289,12 @@ def _media_for_pdf_page_size(pdf_data: bytes) -> str | None:
     return None
 
 
-def _resolution_dpi(values: list[str]) -> int:
-    for value in values:
-        match = re.match(r"^(\d+)(?:x\d+)?dpi$", value)
-        if match:
-            return int(match.group(1))
-    return 300
+def _normalise_raster_dpi(value: Any) -> int:
+    try:
+        dpi = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RASTER_DPI
+    return max(72, min(600, dpi))
 
 
 @dataclass
@@ -308,6 +310,7 @@ class PrintJobResult:
     copies: int | None = None
     orientation: str | None = None
     media: str | None = None
+    raster_dpi: int | None = None
     sides: str | None = None
     document_format: str | None = None
     status_code: str | None = None
@@ -399,6 +402,7 @@ class PendingJob:
     copies: int | None = None
     orientation: str | None = None
     media: str | None = None
+    raster_dpi: int | None = None
     mail_subject: str = ""
     mail_params: MailPrintParameters = field(default_factory=MailPrintParameters)
     queued_at: str = field(
@@ -416,6 +420,7 @@ class PendingJob:
             "copies": self.copies,
             "orientation": self.orientation,
             "media": self.media,
+            "raster_dpi": self.raster_dpi,
         }
 
 
@@ -512,6 +517,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     @property
     def _queue_folder(self) -> str:
         return self._entry.options.get(CONF_QUEUE_FOLDER, DEFAULT_QUEUE_FOLDER)
+
+    @property
+    def _raster_dpi(self) -> int:
+        """DPI used when direct IPP printing requires raster conversion."""
+        return _normalise_raster_dpi(
+            self._entry.options.get(CONF_RASTER_DPI, DEFAULT_RASTER_DPI)
+        )
 
     @property
     def _allowed_senders(self) -> list[str]:
@@ -771,6 +783,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     copies=mail_params.copies,
                     orientation=mail_params.orientation,
                     media=mail_params.media,
+                    raster_dpi=mail_params.raster_dpi,
                     mail_subject=subject,
                     mail_params=mail_params,
                 )
@@ -809,6 +822,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 copies=mail_params.copies,
                 orientation=mail_params.orientation,
                 media=mail_params.media,
+                raster_dpi=mail_params.raster_dpi,
             )
             results.append(result)
             self._record_job(result)
@@ -842,6 +856,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         copies: int | None = None,
         orientation: str | None = None,
         media: str | None = None,
+        raster_dpi: int | None = None,
     ) -> PrintJobResult:
         """Fetch one attachment via imap.fetch_part and print it.
 
@@ -863,6 +878,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return PrintJobResult(
                 filename=filename, success=False, error=str(exc),
                 sender=sender,
+                raster_dpi=raster_dpi,
                 imap_entry_id=entry_id, imap_uid=uid, imap_part_key=part_key,
             )
 
@@ -880,6 +896,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return PrintJobResult(
                 filename=filename, success=False, error=str(exc),
                 sender=sender,
+                raster_dpi=raster_dpi,
                 imap_entry_id=entry_id, imap_uid=uid, imap_part_key=part_key,
             )
 
@@ -897,6 +914,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             copies=copies,
             orientation=orientation,
             media=media,
+            raster_dpi=raster_dpi,
         )
         # Attach IMAP identifiers for future retry.
         result.sender = sender
@@ -942,6 +960,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             copies=job.copies,
             orientation=job.orientation,
             media=job.media,
+            raster_dpi=job.raster_dpi,
         )
         self._record_job(result)
         await self._async_notify_job(result)
@@ -1237,6 +1256,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     f"Copies: {result.copies or 1}",
                     f"Orientation: {result.orientation or 'default'}",
                     f"Media: {result.media or 'default'}",
+                    f"Raster DPI: {result.raster_dpi or 'n/a'}",
                     f"Timestamp: {result.timestamp}",
                     "",
                 ]
@@ -1256,6 +1276,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         copies: int | None = None,
         orientation: str | None = None,
         media: str | None = None,
+        raster_dpi: int | None = None,
         mail_subject: str | None = None,
         mail_text: str | None = None,
     ) -> PrintJobResult:
@@ -1281,6 +1302,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         effective_copies = mail_params.copies or copies
         effective_orientation = mail_params.orientation or orientation
         effective_media = mail_params.media or media
+        effective_raster_dpi = mail_params.raster_dpi or raster_dpi
 
         # Decode RFC 2047 MIME-encoded filenames that arrive from the IMAP event.
         effective_filename = _decode_mime_filename(
@@ -1333,6 +1355,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             copies=effective_copies,
             orientation=effective_orientation,
             media=effective_media,
+            raster_dpi=effective_raster_dpi,
         )
         self._record_job(result)
         await self._async_send_status_reply(
@@ -1353,6 +1376,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         copies: int | None = None,
         orientation: str | None = None,
         media: str | None = None,
+        raster_dpi: int | None = None,
     ) -> PrintJobResult:
         """Print a PDF file from disk and return the result."""
         filename = os.path.basename(file_path)
@@ -1380,6 +1404,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             copies=copies,
             orientation=orientation,
             media=media,
+            raster_dpi=raster_dpi,
         )
         self._record_job(result)
         await self.async_request_refresh()
@@ -1395,6 +1420,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         copies: int | None = None,
         orientation: str | None = None,
         media: str | None = None,
+        raster_dpi: int | None = None,
     ) -> dict:
         """Print all PDF attachments from one IMAP email by UID."""
         from homeassistant.exceptions import HomeAssistantError
@@ -1454,6 +1480,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 copies=copies,
                 orientation=orientation,
                 media=media,
+                raster_dpi=raster_dpi,
                 mail_subject=subject,
                 mail_text=body_text,
             )
@@ -1726,9 +1753,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         copies: int | None = None,
         orientation: str | None = None,
         media: str | None = None,
+        raster_dpi: int | None = None,
     ) -> PrintJobResult:
         """Build an IPP packet and POST it to CUPS."""
         filename = sanitize_ipp_job_name(filename)
+        effective_raster_dpi = _normalise_raster_dpi(
+            raster_dpi if raster_dpi is not None else self._raster_dpi
+        )
         effective_orientation = _orientation_for_job(booklet, orientation)
         orientation_requested = (
             _ORIENTATION_ENUMS[effective_orientation]
@@ -1750,13 +1781,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
                     copies=effective_copies, orientation=effective_orientation,
-                    media=effective_media, status=error,
+                    media=effective_media, raster_dpi=effective_raster_dpi,
+                    status=error,
                 )
 
         sides = determine_sides(duplex_mode, booklet)
         try:
             document_format, document_data = await self._async_prepare_document_for_printing(
-                pdf_data, sides
+                pdf_data, sides, raster_dpi=effective_raster_dpi
             )
         except Exception as exc:
             error = _describe_exception(exc)
@@ -1765,8 +1797,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
                 copies=effective_copies, orientation=effective_orientation,
-                media=effective_media, sides=sides, status=error,
+                media=effective_media, raster_dpi=effective_raster_dpi,
+                sides=sides, status=error,
             )
+        reported_raster_dpi = (
+            effective_raster_dpi
+            if document_format in {"image/pwg-raster", "image/jpeg"}
+            else None
+        )
 
         packet = build_ipp_packet(
             self._printer_uri,
@@ -1804,7 +1842,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         filename=filename, success=False, error=error,
                         duplex=duplex_mode, booklet=booklet,
                         copies=effective_copies, orientation=effective_orientation,
-                        media=effective_media, sides=sides, document_format=document_format,
+                        media=effective_media, raster_dpi=reported_raster_dpi,
+                        sides=sides, document_format=document_format,
                         status_code=error, status=error,
                     )
 
@@ -1815,7 +1854,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         filename=filename, success=False, error=error,
                         duplex=duplex_mode, booklet=booklet,
                         copies=effective_copies, orientation=effective_orientation,
-                        media=effective_media, sides=sides, document_format=document_format,
+                        media=effective_media, raster_dpi=reported_raster_dpi,
+                        sides=sides, document_format=document_format,
                         status_code="HTTP 200", status=error,
                     )
 
@@ -1833,7 +1873,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         filename=filename, success=True,
                         duplex=duplex_mode, booklet=booklet,
                         copies=effective_copies, orientation=effective_orientation,
-                        media=effective_media, sides=sides, document_format=document_format,
+                        media=effective_media, raster_dpi=reported_raster_dpi,
+                        sides=sides, document_format=document_format,
                         status_code=ipp_status_code, status=ipp_status,
                     )
 
@@ -1843,7 +1884,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
                     copies=effective_copies, orientation=effective_orientation,
-                    media=effective_media, sides=sides, document_format=document_format,
+                    media=effective_media, raster_dpi=reported_raster_dpi,
+                    sides=sides, document_format=document_format,
                     status_code=ipp_status_code, status=ipp_status,
                 )
 
@@ -1869,6 +1911,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     copies=effective_copies,
                     orientation=effective_orientation,
                     media=effective_media,
+                    raster_dpi=reported_raster_dpi,
                     sides=sides,
                     document_format=document_format,
                     status_code="timeout-submitted",
@@ -1879,7 +1922,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
                 copies=effective_copies, orientation=effective_orientation,
-                media=effective_media, sides=sides, document_format=document_format,
+                media=effective_media, raster_dpi=reported_raster_dpi,
+                sides=sides, document_format=document_format,
                 status_code="timeout", status=error,
             )
         except aiohttp.ClientError as exc:
@@ -1892,7 +1936,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
                 copies=effective_copies, orientation=effective_orientation,
-                media=effective_media, sides=sides, document_format=document_format,
+                media=effective_media, raster_dpi=reported_raster_dpi,
+                sides=sides, document_format=document_format,
                 status_code="network-error", status=error,
             )
 
@@ -1907,7 +1952,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return "application/pdf", False
 
     async def _async_prepare_document_for_printing(
-        self, pdf_data: bytes, sides: str
+        self, pdf_data: bytes, sides: str, raster_dpi: int | None = None
     ) -> tuple[str, bytes]:
         """Return document-format and payload bytes accepted by this printer."""
         if not self._is_direct_mode:
@@ -1923,7 +1968,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 if "srgb_8" in capabilities.pwg_raster_types
                 else "sgray_8"
             )
-            dpi = _resolution_dpi(capabilities.pwg_raster_resolutions)
+            dpi = _normalise_raster_dpi(
+                raster_dpi if raster_dpi is not None else self._raster_dpi
+            )
             raster_data = await self.hass.async_add_executor_job(
                 partial(
                     convert_pdf_to_pwg_raster,
@@ -1936,8 +1983,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             )
             return document_format, raster_data
         if document_format == "image/jpeg":
+            dpi = _normalise_raster_dpi(
+                raster_dpi if raster_dpi is not None else self._raster_dpi
+            )
             jpeg_data = await self.hass.async_add_executor_job(
-                partial(convert_pdf_to_jpeg, pdf_data)
+                partial(convert_pdf_to_jpeg, pdf_data, dpi=dpi)
             )
             return document_format, jpeg_data
         raise ValueError(
@@ -1973,6 +2023,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 copies=job.copies,
                 orientation=job.orientation,
                 media=job.media,
+                raster_dpi=job.raster_dpi,
             )
             self._record_job(result)
             await self._async_notify_job(result)
@@ -2064,6 +2115,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "copies": result.copies,
                 "orientation": result.orientation,
                 "media": result.media,
+                "raster_dpi": result.raster_dpi,
                 "sides": result.sides,
                 "document_format": result.document_format,
                 "status_code": result.status_code,

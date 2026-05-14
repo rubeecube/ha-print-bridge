@@ -37,6 +37,7 @@ from .const import (
     CONF_NOTIFY_ON_SUCCESS,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
+    CONF_RASTER_DPI,
     CONF_AUTO_PRINT_ENABLED,
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_DAYS,
@@ -53,6 +54,7 @@ from .const import (
     DEFAULT_NOTIFY_ON_FAILURE,
     DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_QUEUE_FOLDER,
+    DEFAULT_RASTER_DPI,
     DEFAULT_AUTO_PRINT_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
     DEFAULT_SCHEDULE_DAYS,
@@ -653,6 +655,10 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 CONF_QUEUE_FOLDER,
                 default=options.get(CONF_QUEUE_FOLDER, DEFAULT_QUEUE_FOLDER),
             ): str,
+            vol.Required(
+                CONF_RASTER_DPI,
+                default=options.get(CONF_RASTER_DPI, DEFAULT_RASTER_DPI),
+            ): vol.All(vol.Coerce(int), vol.Range(min=72, max=600)),
             vol.Required(
                 CONF_EMAIL_ACTION,
                 default=options.get(CONF_EMAIL_ACTION, DEFAULT_EMAIL_ACTION),

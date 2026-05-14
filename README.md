@@ -7,8 +7,8 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-153%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.21-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-154%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.22-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
@@ -187,6 +187,7 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 | **Booklet Patterns** | *(empty)* | Filename substrings that trigger booklet page reordering. |
 | **Delete after printing** | On | Remove the PDF from the queue folder after a successful print. |
 | **Print Queue Folder** | `/media/print_queue` | Used by the `print_file` service and queue-depth sensor. |
+| **Raster DPI** | `150` | Used only when direct IPP printing must convert PDFs to PWG Raster/JPEG. Lower values are faster and create smaller jobs. |
 | **Email Action after Printing** | Do nothing | What to do with the email after the PDF prints: **Do nothing** / **Mark as read** / **Move to archive folder** / **Delete from server**. |
 | **Archive Folder** | `INBOX/Printed` | Target folder when "Move to archive folder" is selected. Created automatically by most IMAP servers. |
 | **Notify when print fails** | On | Send a HA persistent notification when a job fails (with error details). |
@@ -280,6 +281,7 @@ Print a PDF from the HA filesystem.
 | `copies` | no | Number of copies, 1-20 |
 | `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
 | `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
+| `raster_dpi` | no | Direct IPP raster conversion DPI, 72-600. Lower is faster; default is `150`. |
 
 ### `print_bridge.clear_queue`
 
@@ -302,6 +304,7 @@ Used internally by the blueprint; callable from any automation or script.
 | `copies` | no | Number of copies, 1-20 |
 | `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
 | `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
+| `raster_dpi` | no | Direct IPP raster conversion DPI, 72-600. Lower is faster; default is `150`. |
 | `sender` | no | Original email sender, used for status replies |
 | `mail_subject` | no | Original email subject, used for mail parameters and reply title |
 | `mail_text` | no | Original plain-text email body, used for mail parameters |
@@ -320,6 +323,7 @@ Print all PDF attachments from a specific email in your mailbox — on demand, w
 | `copies` | no | Number of copies, 1-20 |
 | `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
 | `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
+| `raster_dpi` | no | Direct IPP raster conversion DPI, 72-600. Lower is faster; default is `150`. |
 
 ### Mail print parameters
 
@@ -328,13 +332,13 @@ You can include per-email print settings in the subject or body. These override 
 Subject form:
 
 ```text
-[pb booklet=true duplex=short-edge copies=2 paper=a4 reply=true]
+[pb booklet=true duplex=short-edge copies=2 paper=a4 dpi=150 reply=true]
 ```
 
 Body form:
 
 ```text
-Print-Bridge: attachment="Au Puits"; orientation=landscape; paper=a4
+Print-Bridge: attachment="Au Puits"; orientation=landscape; paper=a4; quality=fast
 ```
 
 Supported parameters:
@@ -346,6 +350,8 @@ Supported parameters:
 | `copies` | `1` through `20` |
 | `orientation` | `portrait` / `landscape`; booklet jobs always request landscape |
 | `paper` / `media` | `a4`, `letter`, `legal`, or a raw IPP media keyword |
+| `dpi` / `raster_dpi` | `72` through `600`; only used when direct IPP requires raster conversion |
+| `quality` | `draft`, `fast`, `normal`, `high`, or `best` (`fast` maps to 150 DPI) |
 | `attachment` / `attachment_filter` / `file` | Filename substring to print only matching PDFs |
 | `reply` / `status_reply` | `true` to request a status reply, `false` to suppress one |
 
@@ -389,7 +395,7 @@ This event appears in the native HA **Logbook** as a human-readable sentence:
 The `sensor.print_bridge_*_job_log` entity stores the last 50 jobs as attributes,
 including timestamp, filename, success/failure, sender, duplex mode, and booklet flag.
 It also stores the effective IPP sides, document format, status code, copies,
-orientation, and media when available.
+orientation, media, and raster DPI when available.
 
 ---
 
@@ -402,7 +408,7 @@ Mail Server ──IMAP IDLE──► HA IMAP Integration ──imap_content even
                           2. Check: is folder in folder_filter?               │
                           3. Check: schedule day/hour/template open?          │
                           4. For each PDF part → imap.fetch_part ◄────────────┘
-                          5. Mail parameters? → override duplex/booklet/copies/media
+                          5. Mail parameters? → override duplex/booklet/copies/media/dpi
                           6. Booklet? → reorder pages + request landscape orientation
                           7. Build IPP/2.0 packet → POST to CUPS/printer
                           8. Fire print_bridge_job_completed → Logbook/status reply

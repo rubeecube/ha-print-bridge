@@ -5,12 +5,13 @@ from custom_components.print_bridge.mail_params import parse_mail_print_paramete
 
 def test_subject_bracket_params_are_parsed():
     params = parse_mail_print_parameters(
-        "[pb duplex=short-edge copies=2 reply=true] Weekly packet",
+        "[pb duplex=short-edge copies=2 dpi=150 reply=true] Weekly packet",
         "",
     )
 
     assert params.duplex == "two-sided-short-edge"
     assert params.copies == 2
+    assert params.raster_dpi == 150
     assert params.reply is True
 
 
@@ -28,7 +29,7 @@ def test_body_print_bridge_line_supports_named_settings():
 
 def test_invalid_params_are_ignored():
     params = parse_mail_print_parameters(
-        "[pb copies=30 orientation=sideways booklet=maybe]",
+        "[pb copies=30 orientation=sideways booklet=maybe dpi=1000]",
         "PB: sides=unknown; reply=no",
     )
 
@@ -36,4 +37,14 @@ def test_invalid_params_are_ignored():
     assert params.orientation is None
     assert params.booklet is None
     assert params.duplex is None
+    assert params.raster_dpi is None
     assert params.reply is False
+
+
+def test_quality_alias_sets_raster_dpi():
+    params = parse_mail_print_parameters(
+        "[pb quality=fast]",
+        "Print-Bridge: quality=best",
+    )
+
+    assert params.raster_dpi == 600
