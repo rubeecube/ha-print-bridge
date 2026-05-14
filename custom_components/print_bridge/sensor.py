@@ -163,6 +163,7 @@ class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
                     "copies": j.copies,
                     "orientation": j.orientation,
                     "media": j.media,
+                    "raster_dpi": j.raster_dpi,
                     "sides": j.sides,
                     "document_format": j.document_format,
                     "status_code": j.status_code,

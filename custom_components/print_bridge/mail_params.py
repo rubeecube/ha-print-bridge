@@ -50,6 +50,15 @@ _MEDIA_ALIASES = {
     "us-legal": "na_legal_8.5x14in",
 }
 
+_QUALITY_DPI = {
+    "draft": 100,
+    "fast": 150,
+    "normal": 300,
+    "quality": 300,
+    "high": 300,
+    "best": 600,
+}
+
 
 @dataclass(frozen=True)
 class MailPrintParameters:
@@ -60,6 +69,7 @@ class MailPrintParameters:
     copies: int | None = None
     orientation: str | None = None
     media: str | None = None
+    raster_dpi: int | None = None
     attachment_filter: str | None = None
     reply: bool | None = None
 
@@ -73,6 +83,7 @@ class MailPrintParameters:
                 self.copies,
                 self.orientation,
                 self.media,
+                self.raster_dpi,
                 self.attachment_filter,
                 self.reply,
             )
@@ -86,6 +97,7 @@ class MailPrintParameters:
             "copies",
             "orientation",
             "media",
+            "raster_dpi",
             "attachment_filter",
             "reply",
         ):
@@ -115,6 +127,11 @@ def parse_mail_print_parameters(subject: str = "", body: str = "") -> MailPrintP
         copies=_parse_copies(raw_pairs.get("copies")),
         orientation=_parse_orientation(raw_pairs.get("orientation")),
         media=_parse_media(raw_pairs.get("media") or raw_pairs.get("paper")),
+        raster_dpi=_parse_raster_dpi(
+            raw_pairs.get("raster_dpi")
+            or raw_pairs.get("dpi")
+            or raw_pairs.get("quality")
+        ),
         attachment_filter=(
             raw_pairs.get("attachment")
             or raw_pairs.get("attachment_filter")
@@ -179,3 +196,17 @@ def _parse_media(value: str | None) -> str | None:
         return None
     normalized = value.strip().lower().replace(" ", "-")
     return _MEDIA_ALIASES.get(normalized, normalized)
+
+
+def _parse_raster_dpi(value: str | None) -> int | None:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    if normalized in _QUALITY_DPI:
+        return _QUALITY_DPI[normalized]
+    normalized = normalized.removesuffix("dpi").strip()
+    try:
+        dpi = int(normalized)
+    except ValueError:
+        return None
+    return dpi if 72 <= dpi <= 600 else None

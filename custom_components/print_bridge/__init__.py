@@ -51,6 +51,9 @@ _PRINT_FILE_SCHEMA = vol.Schema(
         vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
         vol.Optional("orientation"): vol.In(("portrait", "landscape")),
         vol.Optional("media"): cv.string,
+        vol.Optional("raster_dpi"): vol.All(
+            vol.Coerce(int), vol.Range(min=72, max=600)
+        ),
     }
 )
 
@@ -66,6 +69,9 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
         vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
         vol.Optional("orientation"): vol.In(("portrait", "landscape")),
         vol.Optional("media"): cv.string,
+        vol.Optional("raster_dpi"): vol.All(
+            vol.Coerce(int), vol.Range(min=72, max=600)
+        ),
         vol.Optional("sender"): cv.string,
         vol.Optional("mail_subject"): cv.string,
         vol.Optional("mail_text"): cv.string,
@@ -248,6 +254,7 @@ def _register_services(hass: HomeAssistant) -> None:
         copies: int | None = call.data.get("copies")
         orientation: str | None = call.data.get("orientation")
         media: str | None = call.data.get("media")
+        raster_dpi: int | None = call.data.get("raster_dpi")
 
         coordinator = _get_any_coordinator(hass).selected_printer_coordinator
         result = await coordinator.async_print_file(
@@ -257,6 +264,7 @@ def _register_services(hass: HomeAssistant) -> None:
             copies=copies,
             orientation=orientation,
             media=media,
+            raster_dpi=raster_dpi,
         )
         if not result.success:
             raise HomeAssistantError(
@@ -282,6 +290,7 @@ def _register_services(hass: HomeAssistant) -> None:
             copies=call.data.get("copies"),
             orientation=call.data.get("orientation"),
             media=call.data.get("media"),
+            raster_dpi=call.data.get("raster_dpi"),
             sender=call.data.get("sender"),
             mail_subject=call.data.get("mail_subject"),
             mail_text=call.data.get("mail_text"),
@@ -413,6 +422,7 @@ def _register_services(hass: HomeAssistant) -> None:
         copies: int | None = call.data.get("copies")
         orientation: str | None = call.data.get("orientation")
         media: str | None = call.data.get("media")
+        raster_dpi: int | None = call.data.get("raster_dpi")
 
         controller = _get_any_coordinator(hass)
         coordinator = controller.selected_printer_coordinator
@@ -425,6 +435,7 @@ def _register_services(hass: HomeAssistant) -> None:
             copies=copies,
             orientation=orientation,
             media=media,
+            raster_dpi=raster_dpi,
         )
 
     hass.services.async_register(
@@ -441,6 +452,9 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
                 vol.Optional("orientation"): vol.In(("portrait", "landscape")),
                 vol.Optional("media"): cv.string,
+                vol.Optional("raster_dpi"): vol.All(
+                    vol.Coerce(int), vol.Range(min=72, max=600)
+                ),
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,

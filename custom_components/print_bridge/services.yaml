@@ -75,6 +75,17 @@ print_email:
       required: false
       selector:
         text:
+    raster_dpi:
+      name: Raster DPI
+      description: >-
+        DPI used when a direct IPP printer requires PDF-to-raster conversion.
+        Lower values are faster and create smaller jobs; 150 is a good fast default.
+      required: false
+      selector:
+        number:
+          min: 72
+          max: 600
+          mode: box
 
 print_file:
   name: Print File
@@ -139,6 +150,17 @@ print_file:
       required: false
       selector:
         text:
+    raster_dpi:
+      name: Raster DPI
+      description: >-
+        DPI used when a direct IPP printer requires PDF-to-raster conversion.
+        Lower values are faster and create smaller jobs; 150 is a good fast default.
+      required: false
+      selector:
+        number:
+          min: 72
+          max: 600
+          mode: box
 
 clear_queue:
   name: Clear Print Queue
@@ -305,6 +327,17 @@ process_imap_part:
       required: false
       selector:
         text:
+    raster_dpi:
+      name: Raster DPI
+      description: >-
+        DPI used when a direct IPP printer requires PDF-to-raster conversion.
+        Lower values are faster and create smaller jobs; 150 is a good fast default.
+      required: false
+      selector:
+        number:
+          min: 72
+          max: 600
+          mode: box
     sender:
       name: Sender
       description: Original email sender; used for optional status replies.

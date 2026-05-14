@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.22] — 2026-05-14
+
+### Added
+
+- **Fast direct IPP raster printing** — added a configurable `raster_dpi` option for direct printers that require PWG Raster/JPEG conversion. The default is now `150` DPI to make large batches much faster and smaller than 300/600 DPI raster jobs.
+- **Per-job raster speed overrides** — `print_file`, `print_email`, `process_imap_part`, and mail parameters now accept `raster_dpi` / `dpi`; mail `quality=fast|normal|best` aliases are also supported.
+
+### Changed
+
+- Job history, status replies, and audit events now include the raster DPI used when a job is converted before printing.
+- Bumped package metadata to `0.1.22`.
+
+---
+
 ## [0.1.21] — 2026-05-14
 
 ### Fixed
@@ -264,6 +278,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.22]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.22
 [0.1.21]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.21
 [0.1.20]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.20
 [0.1.19]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.19

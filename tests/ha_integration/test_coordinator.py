@@ -226,6 +226,7 @@ async def test_pdf_event_triggers_fetch_and_print(hass: HomeAssistant) -> None:
         copies=None,
         orientation=None,
         media=None,
+        raster_dpi=None,
     )
 
 
@@ -271,7 +272,7 @@ async def test_mail_params_override_imap_event_print_settings(
         await coordinator.async_handle_imap_event(
             _event(
                 parts=_pdf_parts("Au Puits booklet.pdf"),
-                subject="[pb duplex=short-edge copies=2]",
+                subject="[pb duplex=short-edge copies=2 dpi=150]",
                 text="Print-Bridge: booklet=true; paper=a4; orientation=landscape",
             )
         )
@@ -287,6 +288,7 @@ async def test_mail_params_override_imap_event_print_settings(
         copies=2,
         orientation="landscape",
         media="iso_a4_210x297mm",
+        raster_dpi=150,
     )
 
 
@@ -779,6 +781,7 @@ async def test_retry_job_refetches_and_prints(hass: HomeAssistant) -> None:
         copies=None,
         orientation=None,
         media=None,
+        raster_dpi=None,
     )
 
 
@@ -1053,7 +1056,9 @@ async def test_direct_printer_converts_pdf_to_pwg_when_pdf_not_supported(
         )
 
     assert result.success is True
+    assert result.raster_dpi == 150
     mock_convert.assert_called_once()
+    assert mock_convert.call_args.kwargs["dpi"] == 150
     print_body = mock_session.post.call_args_list[1].kwargs["data"]
     assert b"document-format" in print_body
     assert b"image/pwg-raster" in print_body
@@ -1149,11 +1154,13 @@ async def test_pwg_only_printer_receives_rotated_booklet_raster(
         return_value=mock_session,
     ):
         result = await coordinator.async_send_print_job(
-            "booklet.pdf", _make_a4_pdf(), "two-sided-long-edge", True
+            "booklet.pdf", _make_a4_pdf(), "two-sided-long-edge", True,
+            raster_dpi=72,
         )
 
     assert result.success is True
     assert result.document_format == "image/pwg-raster"
+    assert result.raster_dpi == 72
     assert result.orientation == "landscape"
     assert result.sides == "two-sided-short-edge"
     assert result.media == "iso_a4_210x297mm"
