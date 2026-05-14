@@ -69,6 +69,9 @@ def convert_pdf_to_pwg_raster(
         bitmap = page.render(scale=scale)
         image = bitmap.to_pil()
         image = _prepare_page_image(image, color_type)
+        image, width_pt, height_pt = _normalise_landscape_media_for_pwg(
+            image, width_pt, height_pt
+        )
 
         out.write(
             _build_pwg_header(
@@ -112,6 +115,23 @@ def _prepare_page_image(image: Image.Image, color_type: str) -> Image.Image:
     if color_type == "sgray_8":
         return image.convert("L")
     return image.convert("RGB")
+
+
+def _normalise_landscape_media_for_pwg(
+    image: Image.Image, width_pt: float, height_pt: float
+) -> tuple[Image.Image, float, float]:
+    """Rotate common landscape sheets onto portrait media for PWG printers.
+
+    Some direct IPP printers treat PWG Raster page-size names like A4 as portrait
+    media and ignore landscape dimensions.  Pre-rotating the raster data keeps
+    the client responsible for orientation instead of relying on printer-side
+    transforms.
+    """
+    if width_pt <= height_pt:
+        return image, width_pt, height_pt
+    if _page_size_name(width_pt, height_pt) == "custom":
+        return image, width_pt, height_pt
+    return image.rotate(90, expand=True), height_pt, width_pt
 
 
 def _build_pwg_header(

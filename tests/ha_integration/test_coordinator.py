@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import socket
 import struct
 from datetime import datetime, time as dt_time
@@ -24,6 +25,7 @@ from aiohttp import web
 import pytest
 from homeassistant.core import Event, HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
+from pypdf import PdfWriter
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.print_bridge.const import CONF_DIRECT_PRINTER_URL, DOMAIN
@@ -118,6 +120,7 @@ def _ipp_more_attr(tag: int, value: bytes) -> bytes:
 def _printer_attributes_response(
     formats: tuple[str, ...] = ("application/pdf",),
     raster_types: tuple[str, ...] = (),
+    resolution_dpi: int = 300,
 ) -> bytes:
     body = struct.pack(">HHI", 0x0200, 0x0000, 1) + b"\x04"
     for index, value in enumerate(formats):
@@ -135,10 +138,27 @@ def _printer_attributes_response(
     body += _ipp_attr(
         0x32,
         "pwg-raster-document-resolution-supported",
-        struct.pack(">IIB", 300, 300, 3),
+        struct.pack(">IIB", resolution_dpi, resolution_dpi, 3),
     )
     body += _ipp_attr(0x44, "pwg-raster-document-sheet-back", b"rotated")
     return body + b"\x03"
+
+
+def _make_a4_pdf(page_count: int = 4) -> bytes:
+    writer = PdfWriter()
+    for _ in range(page_count):
+        writer.add_blank_page(width=595, height=842)
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+def _c_string(data: bytes, offset: int, length: int = 64) -> str:
+    return data[offset: offset + length].split(b"\0", 1)[0].decode("ascii")
+
+
+def _u32(data: bytes, offset: int) -> int:
+    return struct.unpack(">I", data[offset: offset + 4])[0]
 
 
 async def _start_fake_ipp_server(status_code: int = 0x0000):
@@ -1038,6 +1058,122 @@ async def test_direct_printer_converts_pdf_to_pwg_when_pdf_not_supported(
     assert b"document-format" in print_body
     assert b"image/pwg-raster" in print_body
     assert print_body.endswith(b"PWG")
+
+
+async def test_booklet_pwg_job_is_pre_rotated_without_ipp_orientation(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(
+        hass,
+        data={CONF_DIRECT_PRINTER_URL: "http://printer.local:631/ipp/print"},
+    )
+
+    caps_resp = MagicMock()
+    caps_resp.status = 200
+    caps_resp.__aenter__ = AsyncMock(return_value=caps_resp)
+    caps_resp.__aexit__ = AsyncMock(return_value=False)
+    caps_resp.read = AsyncMock(
+        return_value=_printer_attributes_response(
+            formats=("application/octet-stream", "image/pwg-raster"),
+            raster_types=("srgb_8",),
+        )
+    )
+    print_resp = MagicMock()
+    print_resp.status = 200
+    print_resp.__aenter__ = AsyncMock(return_value=print_resp)
+    print_resp.__aexit__ = AsyncMock(return_value=False)
+    print_resp.read = AsyncMock(return_value=_ipp_response())
+
+    mock_session = MagicMock()
+    mock_session.post.side_effect = [caps_resp, print_resp]
+
+    with (
+        patch(
+            "custom_components.print_bridge.coordinator.async_get_clientsession",
+            return_value=mock_session,
+        ),
+        patch(
+            "custom_components.print_bridge.coordinator.create_booklet",
+            return_value=_FAKE_PDF,
+        ),
+        patch(
+            "custom_components.print_bridge.coordinator.convert_pdf_to_pwg_raster",
+            return_value=b"PWG",
+        ),
+    ):
+        result = await coordinator.async_send_print_job(
+            "booklet.pdf", _FAKE_PDF, "two-sided-short-edge", True
+        )
+
+    assert result.success is True
+    assert result.orientation == "landscape"
+    print_body = mock_session.post.call_args_list[1].kwargs["data"]
+    assert (
+        _ipp_attr(0x23, "orientation-requested", struct.pack(">i", 4))
+        not in print_body
+    )
+    assert b"print-scaling" in print_body
+    assert b"fit" in print_body
+
+
+async def test_pwg_only_printer_receives_rotated_booklet_raster(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(
+        hass,
+        data={CONF_DIRECT_PRINTER_URL: "http://printer.local:631/ipp/print"},
+    )
+
+    caps_resp = MagicMock()
+    caps_resp.status = 200
+    caps_resp.__aenter__ = AsyncMock(return_value=caps_resp)
+    caps_resp.__aexit__ = AsyncMock(return_value=False)
+    caps_resp.read = AsyncMock(
+        return_value=_printer_attributes_response(
+            formats=("application/octet-stream", "image/pwg-raster"),
+            raster_types=("srgb_8",),
+            resolution_dpi=72,
+        )
+    )
+    print_resp = MagicMock()
+    print_resp.status = 200
+    print_resp.__aenter__ = AsyncMock(return_value=print_resp)
+    print_resp.__aexit__ = AsyncMock(return_value=False)
+    print_resp.read = AsyncMock(return_value=_ipp_response())
+
+    mock_session = MagicMock()
+    mock_session.post.side_effect = [caps_resp, print_resp]
+
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        result = await coordinator.async_send_print_job(
+            "booklet.pdf", _make_a4_pdf(), "two-sided-long-edge", True
+        )
+
+    assert result.success is True
+    assert result.document_format == "image/pwg-raster"
+    assert result.orientation == "landscape"
+    assert result.sides == "two-sided-short-edge"
+    assert result.media == "iso_a4_210x297mm"
+
+    print_body = mock_session.post.call_args_list[1].kwargs["data"]
+    assert b"image/pwg-raster" in print_body
+    assert b"print-scaling" in print_body
+    assert b"fit" in print_body
+    assert b"orientation-requested" not in print_body
+
+    raster = print_body[print_body.index(b"RaS2"):]
+    header_offset = 4
+    assert _c_string(raster, header_offset) == "PwgRaster"
+    assert _c_string(raster, header_offset + 1732) == "iso_a4_210x297mm"
+    assert _u32(raster, header_offset + 272) == 1
+    assert _u32(raster, header_offset + 368) == 1
+    assert _u32(raster, header_offset + 352) == 595
+    assert _u32(raster, header_offset + 356) == 842
+    assert _u32(raster, header_offset + 372) == 595
+    assert _u32(raster, header_offset + 376) == 842
 
 
 async def test_imap_event_posts_pdf_to_fake_ipp_printer(

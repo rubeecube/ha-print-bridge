@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.21] — 2026-05-14
+
+### Fixed
+
+- **Booklet landscape on 0.1.20 installations** — booklet imposition now always creates a landscape sheet side, including PDFs that report landscape or rotated source page metadata.
+- **Direct IPP/PWG Raster booklet orientation** — landscape booklet pages are pre-rotated onto portrait A4/Letter/Legal raster media so printers that ignore landscape PWG dimensions still print the sheet correctly.
+- **Raster booklet job ticketing** — booklet jobs converted to PWG Raster no longer also send `orientation-requested=landscape`, avoiding printer-side double-rotation or ignored orientation conflicts.
+
+### Changed
+
+- Bumped package metadata to `0.1.21`.
+- Added simulated PWG-only printer coverage for the full booklet-to-raster print path.
+
+---
+
 ## [0.1.20] — 2026-05-14
 
 ### Fixed
@@ -249,6 +264,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.21]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.21
 [0.1.20]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.20
 [0.1.19]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.19
 [0.1.18]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.18

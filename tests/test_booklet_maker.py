@@ -11,6 +11,7 @@ import io
 import pypdfium2 as pdfium
 import pytest
 from pypdf import PdfReader
+from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, NameObject
 
 from conftest import make_pdf, pdf_page_count
@@ -58,6 +59,35 @@ def test_no_extra_pages_for_already_aligned_input():
 
 def test_imposed_sheet_is_landscape_two_up():
     result = create_booklet(make_pdf(4))
+    first_sheet_side = PdfReader(io.BytesIO(result)).pages[0]
+
+    assert float(first_sheet_side.mediabox.width) == pytest.approx(842)
+    assert float(first_sheet_side.mediabox.height) == pytest.approx(595)
+
+
+def test_imposed_sheet_stays_landscape_for_landscape_source_metadata():
+    writer = PdfWriter()
+    for _ in range(4):
+        writer.add_blank_page(width=842, height=595)
+    buf = io.BytesIO()
+    writer.write(buf)
+
+    result = create_booklet(buf.getvalue())
+    first_sheet_side = PdfReader(io.BytesIO(result)).pages[0]
+
+    assert float(first_sheet_side.mediabox.width) == pytest.approx(842)
+    assert float(first_sheet_side.mediabox.height) == pytest.approx(595)
+
+
+def test_imposed_sheet_applies_source_page_rotation_before_layout():
+    writer = PdfWriter()
+    for _ in range(4):
+        page = writer.add_blank_page(width=842, height=595)
+        page.rotate(90)
+    buf = io.BytesIO()
+    writer.write(buf)
+
+    result = create_booklet(buf.getvalue())
     first_sheet_side = PdfReader(io.BytesIO(result)).pages[0]
 
     assert float(first_sheet_side.mediabox.width) == pytest.approx(842)
