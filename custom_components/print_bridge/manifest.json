@@ -1,7 +1,7 @@
 {
   "domain": "print_bridge",
   "name": "Print Bridge",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "config_flow": true,
   "documentation": "https://github.com/rubeecube/ha-print-bridge",
   "issue_tracker": "https://github.com/rubeecube/ha-print-bridge/issues",

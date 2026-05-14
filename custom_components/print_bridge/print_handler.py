@@ -182,6 +182,7 @@ def build_ipp_packet(
     copies: int | None = None,
     orientation_requested: int | None = None,
     media: str | None = None,
+    print_scaling: str | None = None,
 ) -> bytes:
     """Construct a valid IPP 2.0 Print-Job request packet.
 
@@ -197,6 +198,7 @@ def build_ipp_packet(
         orientation_requested: Optional IPP orientation enum
                               (3=portrait, 4=landscape).
         media: Optional IPP media keyword, e.g. ``iso_a4_210x297mm``.
+        print_scaling: Optional IPP print-scaling keyword, e.g. ``fit``.
 
     Returns:
         Complete IPP request bytes ready to POST to the printer/CUPS endpoint.
@@ -221,6 +223,8 @@ def build_ipp_packet(
         )
     if media:
         header += _encode_attr(_TAG_KEYWORD, "media", media)
+    if print_scaling:
+        header += _encode_attr(_TAG_KEYWORD, "print-scaling", print_scaling)
 
     header += _GROUP_END
 
