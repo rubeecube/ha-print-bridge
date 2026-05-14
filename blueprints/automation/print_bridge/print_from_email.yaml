@@ -138,8 +138,13 @@ condition:
   - alias: "Email has at least one PDF attachment"
     condition: template
     value_template: >
-      {{ _parts.values() | selectattr('content_type', 'equalto', 'application/pdf')
-         | list | count > 0 }}
+      {% set ns = namespace(has_pdf=false) %}
+      {% for part in _parts.values() %}
+        {% if (part.content_type | string | lower).split(';')[0] | trim == 'application/pdf' %}
+          {% set ns.has_pdf = true %}
+        {% endif %}
+      {% endfor %}
+      {{ ns.has_pdf }}
 
 # ── Actions ─────────────────────────────────────────────────────────────────
 
@@ -149,7 +154,9 @@ action:
       for_each: "{{ _parts | dictsort }}"
       sequence:
         - condition: template
-          value_template: "{{ repeat.item[1].content_type == 'application/pdf' }}"
+          value_template: >
+            {{ (repeat.item[1].content_type | string | lower).split(';')[0] | trim
+               == 'application/pdf' }}
 
         - variables:
             _filename: >
@@ -166,6 +173,9 @@ action:
             duplex: "{{ _effective_duplex }}"
             booklet: "{{ booklet }}"
             attachment_filter: "{{ attachment_filter }}"
+            sender: "{{ trigger.event.data.sender }}"
+            mail_subject: "{{ trigger.event.data.subject }}"
+            mail_text: "{{ trigger.event.data.text | default('') }}"
 
   - alias: "Mark email as seen (optional)"
     if:

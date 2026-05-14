@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from email.message import EmailMessage
+import io
 import logging
 import os
 import re
+import smtplib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.utils import parseaddr
@@ -124,6 +127,11 @@ _SCHEDULE_DAY_ALIASES = {
 }
 _FALSE_TEMPLATE_VALUES = {"", "0", "false", "no", "off", "none", "unknown", "unavailable"}
 _ORIENTATION_ENUMS = {"portrait": 3, "landscape": 4}
+_MEDIA_BY_POINTS = (
+    ("iso_a4_210x297mm", 595, 842),
+    ("na_letter_8.5x11in", 612, 792),
+    ("na_legal_8.5x14in", 612, 1008),
+)
 
 
 def _decode_mime_filename(value: str) -> str:
@@ -168,6 +176,37 @@ def _split_notify_service(value: str) -> tuple[str, str]:
         domain, service = service_ref.split(".", 1)
         return domain.strip(), service.strip()
     return "notify", service_ref
+
+
+def _send_status_email_smtp(
+    *,
+    server: str,
+    port: int,
+    use_ssl: bool,
+    username: str,
+    password: str,
+    sender: str,
+    recipient: str,
+    subject: str,
+    message: str,
+) -> None:
+    """Send a plain-text status email through the IMAP account's SMTP server."""
+    email = EmailMessage()
+    email["From"] = sender
+    email["To"] = recipient
+    email["Subject"] = subject
+    email.set_content(message)
+
+    if use_ssl:
+        with smtplib.SMTP_SSL(server, port, timeout=30) as smtp:
+            smtp.login(username, password)
+            smtp.send_message(email)
+        return
+
+    with smtplib.SMTP(server, port, timeout=30) as smtp:
+        smtp.starttls()
+        smtp.login(username, password)
+        smtp.send_message(email)
 
 
 def _is_pdf_part(part_info: dict[str, Any]) -> bool:
@@ -219,6 +258,32 @@ def _orientation_for_job(booklet: bool, orientation: str | None) -> str | None:
         return "landscape"
     if orientation in _ORIENTATION_ENUMS:
         return orientation
+    return None
+
+
+def _media_for_pdf_page_size(pdf_data: bytes) -> str | None:
+    """Return an IPP media keyword when the first PDF page matches a common size."""
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(pdf_data))
+        if not reader.pages:
+            return None
+        page = reader.pages[0]
+        width = float(page.mediabox.width)
+        height = float(page.mediabox.height)
+    except Exception:
+        return None
+
+    for media, expected_width, expected_height in _MEDIA_BY_POINTS:
+        if (
+            abs(width - expected_width) <= 4
+            and abs(height - expected_height) <= 4
+        ) or (
+            abs(width - expected_height) <= 4
+            and abs(height - expected_width) <= 4
+        ):
+            return media
     return None
 
 
@@ -755,6 +820,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         if actually_printed:
             await self._async_post_process_email(entry_id, uid)
             await self._async_send_status_reply(
+                imap_entry_id=entry_id,
                 sender=sender,
                 subject=subject,
                 results=results,
@@ -974,36 +1040,43 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     async def _async_send_status_reply(
         self,
         *,
+        imap_entry_id: str | None = None,
         sender: str | None,
         subject: str,
         results: list[PrintJobResult],
         params: MailPrintParameters,
     ) -> None:
-        """Send a status email through a configured HA notify service."""
+        """Send a status email through notify service or SMTP fallback."""
         if params.reply is False:
             return
         if not (self._status_reply_enabled or params.reply is True):
             return
         if not sender:
             logger.warning("Cannot send print status reply: sender address is empty")
+            await self._async_notify_status_reply_issue(
+                "Sender address is empty, so no status email could be sent."
+            )
             return
 
+        title = f"Re: {subject or 'Print Bridge status'}"
+        message = self._format_status_reply(results, params)
         service_ref = self._status_reply_notify_service
         if not service_ref:
-            logger.warning(
-                "Cannot send print status reply to %s: status reply notify service is not configured",
-                sender,
+            await self._async_send_status_reply_via_smtp(
+                imap_entry_id=imap_entry_id,
+                recipient=sender,
+                subject=title,
+                message=message,
             )
             return
 
         domain, service = _split_notify_service(service_ref)
-        message = self._format_status_reply(results, params)
         try:
             await self.hass.services.async_call(
                 domain,
                 service,
                 {
-                    "title": f"Re: {subject or 'Print Bridge status'}",
+                    "title": title,
                     "message": message,
                     "target": [sender],
                 },
@@ -1017,6 +1090,118 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 sender,
                 exc,
             )
+            await self._async_notify_status_reply_issue(
+                f"Status reply via {domain}.{service} failed for {sender}: {exc}"
+            )
+
+    async def _async_send_status_reply_via_smtp(
+        self,
+        *,
+        imap_entry_id: str | None,
+        recipient: str,
+        subject: str,
+        message: str,
+    ) -> None:
+        """Send status reply through the matching IMAP account's SMTP server."""
+        if not imap_entry_id:
+            await self._async_notify_status_reply_issue(
+                "No IMAP entry was available for SMTP status reply fallback."
+            )
+            return
+
+        imap_entry = next(
+            (
+                entry
+                for entry in self.hass.config_entries.async_entries("imap")
+                if entry.entry_id == imap_entry_id
+            ),
+            None,
+        )
+        if imap_entry is None:
+            await self._async_notify_status_reply_issue(
+                f"IMAP entry {imap_entry_id} was not found for SMTP status reply fallback."
+            )
+            return
+
+        data = imap_entry.data
+        server = str(data.get("server", "")).strip()
+        username = str(data.get("username", "")).strip()
+        password = str(data.get("password", ""))
+        use_ssl = bool(data.get("ssl", data.get("use_ssl", True)))
+        port = int(data.get("smtp_port") or (465 if use_ssl else 587))
+
+        if not (server and username and password):
+            await self._async_notify_status_reply_issue(
+                "The IMAP account does not expose enough credentials for SMTP status reply fallback. "
+                "Configure Status Reply Notify Service instead."
+            )
+            return
+
+        try:
+            await self.hass.async_add_executor_job(
+                partial(
+                    _send_status_email_smtp,
+                    server=server,
+                    port=port,
+                    use_ssl=use_ssl,
+                    username=username,
+                    password=password,
+                    sender=username,
+                    recipient=recipient,
+                    subject=subject,
+                    message=message,
+                )
+            )
+        except Exception as exc:
+            logger.warning("SMTP status reply to %s failed: %s", recipient, exc)
+            await self._async_notify_status_reply_issue(
+                f"SMTP status reply to {recipient} failed via {server}:{port}: {exc}"
+            )
+
+    async def _async_notify_status_reply_issue(self, message: str) -> None:
+        """Surface status reply delivery problems in HA instead of only logging."""
+        try:
+            await self.hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "title": "Print Bridge - Status reply not sent",
+                    "message": message,
+                    "notification_id": f"print_bridge_status_reply_{self._entry.entry_id}",
+                },
+            )
+        except Exception:
+            logger.debug(
+                "Could not create status reply diagnostic notification",
+                exc_info=True,
+            )
+
+    async def _async_fetch_email_context(
+        self, entry_id: str, uid: str
+    ) -> dict[str, str]:
+        """Fetch sender/subject/body for old blueprint calls that omit them."""
+        try:
+            fetched: dict[str, Any] = await self.hass.services.async_call(
+                "imap",
+                "fetch",
+                {"entry": entry_id, "uid": uid},
+                blocking=True,
+                return_response=True,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Could not fetch email context for uid=%s entry=%s: %s",
+                uid,
+                entry_id,
+                exc,
+            )
+            return {}
+
+        return {
+            "sender": _normalise_email_address(str(fetched.get("sender", ""))),
+            "subject": str(fetched.get("subject", "")),
+            "text": str(fetched.get("text", "")),
+        }
 
     def _format_status_reply(
         self, results: list[PrintJobResult], params: MailPrintParameters
@@ -1032,7 +1217,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         if params.has_values:
             lines.append(
                 "Mail parameters: "
-                + ", ".join(f"{key}={value}" for key, value in params.as_dict().items())
+                + ", ".join(
+                    f"{key}={value}" for key, value in params.as_dict().items()
+                )
             )
         lines.append("")
 
@@ -1073,6 +1260,18 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         mail_text: str | None = None,
     ) -> PrintJobResult:
         """Fetch one IMAP attachment and print it (called by the service)."""
+        if not sender or mail_subject is None or mail_text is None:
+            context = await self._async_fetch_email_context(entry_id, uid)
+            sender = sender or context.get("sender") or None
+            mail_subject = (
+                mail_subject
+                if mail_subject is not None
+                else context.get("subject", "")
+            )
+            mail_text = (
+                mail_text if mail_text is not None else context.get("text", "")
+            )
+
         mail_params = parse_mail_print_parameters(mail_subject or "", mail_text or "")
         effective_duplex_override = mail_params.duplex or duplex_override
         effective_booklet_override = (
@@ -1137,6 +1336,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         )
         self._record_job(result)
         await self._async_send_status_reply(
+            imap_entry_id=entry_id,
             sender=sender,
             subject=mail_subject or "",
             results=[result],
@@ -1536,11 +1736,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             else None
         )
         effective_copies = copies or 1
+        effective_media = media
         if booklet:
             try:
                 pdf_data = await self.hass.async_add_executor_job(
                     create_booklet, pdf_data
                 )
+                effective_media = effective_media or _media_for_pdf_page_size(pdf_data)
             except Exception as exc:
                 error = _describe_exception(exc)
                 logger.error("Booklet conversion failed for '%s': %s", filename, error)
@@ -1548,7 +1750,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
                     copies=effective_copies, orientation=effective_orientation,
-                    media=media, status=error,
+                    media=effective_media, status=error,
                 )
 
         sides = determine_sides(duplex_mode, booklet)
@@ -1563,7 +1765,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
                 copies=effective_copies, orientation=effective_orientation,
-                media=media, sides=sides, status=error,
+                media=effective_media, sides=sides, status=error,
             )
 
         packet = build_ipp_packet(
@@ -1574,7 +1776,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             document_format=document_format,
             copies=copies,
             orientation_requested=orientation_requested,
-            media=media,
+            media=effective_media,
+            print_scaling="fit" if booklet else None,
         )
 
         session = async_get_clientsession(self.hass)
@@ -1597,7 +1800,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         filename=filename, success=False, error=error,
                         duplex=duplex_mode, booklet=booklet,
                         copies=effective_copies, orientation=effective_orientation,
-                        media=media, sides=sides, document_format=document_format,
+                        media=effective_media, sides=sides, document_format=document_format,
                         status_code=error, status=error,
                     )
 
@@ -1608,7 +1811,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         filename=filename, success=False, error=error,
                         duplex=duplex_mode, booklet=booklet,
                         copies=effective_copies, orientation=effective_orientation,
-                        media=media, sides=sides, document_format=document_format,
+                        media=effective_media, sides=sides, document_format=document_format,
                         status_code="HTTP 200", status=error,
                     )
 
@@ -1626,7 +1829,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         filename=filename, success=True,
                         duplex=duplex_mode, booklet=booklet,
                         copies=effective_copies, orientation=effective_orientation,
-                        media=media, sides=sides, document_format=document_format,
+                        media=effective_media, sides=sides, document_format=document_format,
                         status_code=ipp_status_code, status=ipp_status,
                     )
 
@@ -1636,7 +1839,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
                     copies=effective_copies, orientation=effective_orientation,
-                    media=media, sides=sides, document_format=document_format,
+                    media=effective_media, sides=sides, document_format=document_format,
                     status_code=ipp_status_code, status=ipp_status,
                 )
 
@@ -1661,7 +1864,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     booklet=booklet,
                     copies=effective_copies,
                     orientation=effective_orientation,
-                    media=media,
+                    media=effective_media,
                     sides=sides,
                     document_format=document_format,
                     status_code="timeout-submitted",
@@ -1672,7 +1875,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
                 copies=effective_copies, orientation=effective_orientation,
-                media=media, sides=sides, document_format=document_format,
+                media=effective_media, sides=sides, document_format=document_format,
                 status_code="timeout", status=error,
             )
         except aiohttp.ClientError as exc:
@@ -1685,7 +1888,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
                 copies=effective_copies, orientation=effective_orientation,
-                media=media, sides=sides, document_format=document_format,
+                media=effective_media, sides=sides, document_format=document_format,
                 status_code="network-error", status=error,
             )
 
@@ -1772,6 +1975,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             # Apply configured IMAP action now that the job has been printed.
             await self._async_post_process_email(job.entry_id, job.uid)
             await self._async_send_status_reply(
+                imap_entry_id=job.entry_id,
                 sender=job.sender,
                 subject=job.mail_subject,
                 results=[result],

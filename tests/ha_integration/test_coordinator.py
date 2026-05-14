@@ -633,6 +633,88 @@ async def test_status_reply_uses_configured_notify_service(
     assert "Media: iso_a4_210x297mm" in captured["message"]
 
 
+async def test_status_reply_falls_back_to_imap_account_smtp(
+    hass: HomeAssistant,
+) -> None:
+    opts = {**MOCK_OPTIONS, "status_reply_enabled": True}
+    _, coordinator = await _setup_coordinator(hass, options=opts)
+    imap_entry = MockConfigEntry(
+        domain="imap",
+        data={
+            "server": "mail.example.com",
+            "username": "print@example.com",
+            "password": "secret",
+            "ssl": True,
+        },
+    )
+    imap_entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.print_bridge.coordinator._send_status_email_smtp"
+    ) as mock_send:
+        await coordinator._async_send_status_reply(
+            imap_entry_id=imap_entry.entry_id,
+            sender="sender@example.com",
+            subject="Weekly PDF",
+            results=[PrintJobResult(filename="booklet.pdf", success=True)],
+            params=parse_mail_print_parameters("", "Print-Bridge: reply=true"),
+        )
+
+    mock_send.assert_called_once()
+    assert mock_send.call_args.kwargs["server"] == "mail.example.com"
+    assert mock_send.call_args.kwargs["port"] == 465
+    assert mock_send.call_args.kwargs["sender"] == "print@example.com"
+    assert mock_send.call_args.kwargs["recipient"] == "sender@example.com"
+
+
+async def test_process_imap_part_fetches_email_context_for_old_blueprints(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+
+    async def _fetch(call: ServiceCall) -> dict:
+        return {
+            "sender": "Sender Name <sender@example.com>",
+            "subject": "Old blueprint subject",
+            "text": "Print-Bridge: reply=true; copies=2",
+        }
+
+    hass.services.async_register(
+        "imap",
+        "fetch",
+        _fetch,
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    result = PrintJobResult(filename="booklet.pdf", success=True)
+    with (
+        patch.object(
+            coordinator,
+            "_async_fetch_and_print",
+            new=AsyncMock(return_value=result),
+        ) as mock_fetch,
+        patch.object(
+            coordinator,
+            "_async_send_status_reply",
+            new=AsyncMock(),
+        ) as mock_reply,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        await coordinator.async_process_imap_part(
+            entry_id="imap_entry_1",
+            uid="99",
+            part_key="1",
+            filename="booklet.pdf",
+            booklet_override=True,
+        )
+
+    assert mock_fetch.call_args.kwargs["sender"] == "sender@example.com"
+    assert mock_fetch.call_args.kwargs["copies"] == 2
+    mock_reply.assert_awaited_once()
+    assert mock_reply.call_args.kwargs["sender"] == "sender@example.com"
+    assert mock_reply.call_args.kwargs["subject"] == "Old blueprint subject"
+
+
 # ---------------------------------------------------------------------------
 # Retry
 # ---------------------------------------------------------------------------
@@ -829,6 +911,8 @@ async def test_direct_printer_timeout_after_post_is_treated_as_submitted(
     mock_booklet.assert_called_once_with(_FAKE_PDF)
     packet = mock_session.post.call_args.kwargs["data"]
     assert _ipp_attr(0x23, "orientation-requested", struct.pack(">i", 4)) in packet
+    assert b"print-scaling" in packet
+    assert b"fit" in packet
 
 
 def test_decode_mime_filename_removes_windows_1255_direction_marks() -> None:

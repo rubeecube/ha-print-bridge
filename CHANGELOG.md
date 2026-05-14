@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.20] — 2026-05-14
+
+### Fixed
+
+- **Booklet landscape on direct IPP printers** — booklet jobs now keep A4 media hints after imposition, add `print-scaling=fit`, and encode rotated A4 PWG Raster pages as `iso_a4_210x297mm` instead of `custom`.
+- **Status replies from blueprint automations** — old blueprint/service calls that omit sender, subject, or body now refetch mail context from the IMAP message before sending the status reply.
+- **Imported blueprint drift** — bundled blueprints are updated in the Home Assistant config directory when the integration copy changes.
+
+### Changed
+
+- **Status reply fallback** — when no notify service is configured, Print Bridge now attempts SMTP delivery through the matching HA IMAP account.
+- Bumped package metadata to `0.1.20`.
+
+---
+
 ## [0.1.19] — 2026-05-03
 
 ### Added
@@ -234,6 +249,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.20]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.20
 [0.1.19]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.19
 [0.1.18]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.18
 [0.1.17]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.17

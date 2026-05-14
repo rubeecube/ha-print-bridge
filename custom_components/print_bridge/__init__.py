@@ -128,10 +128,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         dst = _Path(hass.config.config_dir) / "blueprints"
         for src_file in src.rglob("*.yaml"):
             dst_file = dst / src_file.relative_to(src)
-            if not dst_file.exists():
-                dst_file.parent.mkdir(parents=True, exist_ok=True)
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            old_bytes = dst_file.read_bytes() if dst_file.exists() else None
+            new_bytes = src_file.read_bytes()
+            if old_bytes != new_bytes:
                 shutil.copy2(src_file, dst_file)
-                logger.info("Installed Print Bridge blueprint: %s", dst_file.name)
+                logger.info("Updated Print Bridge blueprint: %s", dst_file.name)
 
     await hass.async_add_executor_job(_install_blueprints)
     return True

@@ -238,4 +238,6 @@ def _page_size_name(width_pt: float, height_pt: float) -> str:
     for name, expected_width, expected_height in _PAGE_SIZE_NAMES:
         if abs(width_pt - expected_width) <= 4 and abs(height_pt - expected_height) <= 4:
             return name
+        if abs(width_pt - expected_height) <= 4 and abs(height_pt - expected_width) <= 4:
+            return name
     return "custom"
