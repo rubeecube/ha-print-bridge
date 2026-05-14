@@ -7,8 +7,8 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-149%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.20-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-153%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.21-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)

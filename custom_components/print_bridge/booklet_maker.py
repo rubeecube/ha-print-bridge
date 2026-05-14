@@ -37,7 +37,7 @@ def create_booklet(pdf_data: bytes) -> bytes:
     if not reader.pages:
         raise ValueError("PDF has no pages")
 
-    pages = list(reader.pages)
+    pages = [_normalise_page_for_imposition(page) for page in reader.pages]
     page_width = float(pages[0].mediabox.width)
     page_height = float(pages[0].mediabox.height)
 
@@ -73,8 +73,8 @@ def _impose_spread(
     source_height: float,
 ) -> PageObject:
     """Return one landscape sheet side containing two scaled source pages."""
-    sheet_width = source_height
-    sheet_height = source_width
+    sheet_width = max(source_width, source_height)
+    sheet_height = min(source_width, source_height)
     slot_width = sheet_width / 2
     scale = min(slot_width / source_width, sheet_height / source_height)
     rendered_width = source_width * scale
@@ -106,3 +106,12 @@ def _merge_page(
 ) -> None:
     # pypdf page merge operations can mutate page boxes, so use a copy.
     sheet.merge_transformed_page(copy.copy(source_page), transformation)
+
+
+def _normalise_page_for_imposition(page: PageObject) -> PageObject:
+    """Return a copy with PDF rotation applied to content and page boxes."""
+    normalised = copy.copy(page)
+    rotation = int(normalised.get("/Rotate", 0) or 0) % 360
+    if rotation:
+        normalised.transfer_rotation_to_content()
+    return normalised

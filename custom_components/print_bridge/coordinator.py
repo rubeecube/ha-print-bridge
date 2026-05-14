@@ -1775,7 +1775,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             document_data,
             document_format=document_format,
             copies=copies,
-            orientation_requested=orientation_requested,
+            orientation_requested=(
+                None
+                if booklet and document_format == "image/pwg-raster"
+                else orientation_requested
+            ),
             media=effective_media,
             print_scaling="fit" if booklet else None,
         )
