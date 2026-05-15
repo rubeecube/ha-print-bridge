@@ -118,6 +118,11 @@ class LastJobSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
         if job.duplex:
             attrs["duplex"] = job.duplex
         attrs["booklet"] = job.booklet
+        attrs["source_format"] = job.source_format
+        attrs["converted_format"] = job.converted_format
+        attrs["attachments"] = list(job.attachments)
+        attrs["skipped_attachments"] = list(job.skipped_attachments)
+        attrs["merged_attachment_count"] = job.merged_attachment_count
         attrs["timestamp"] = job.timestamp
         return attrs
 
@@ -166,6 +171,11 @@ class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
                     "raster_dpi": j.raster_dpi,
                     "sides": j.sides,
                     "document_format": j.document_format,
+                    "source_format": j.source_format,
+                    "converted_format": j.converted_format,
+                    "attachments": list(j.attachments),
+                    "skipped_attachments": list(j.skipped_attachments),
+                    "merged_attachment_count": j.merged_attachment_count,
                     "status_code": j.status_code,
                     "status": j.status,
                     "can_retry": j.can_retry,
@@ -199,7 +209,7 @@ class FilterPreviewSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity)
         data = self.coordinator.data
         if data is None or data.filter_preview is None:
             return None
-        return data.filter_preview.with_pdf
+        return data.filter_preview.with_printable or data.filter_preview.with_pdf
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -214,6 +224,7 @@ class FilterPreviewSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity)
             "total_found": preview.total_found,
             "matching_filter": preview.matching,
             "with_pdf": preview.with_pdf,
+            "with_printable": preview.with_printable,
             "emails": [e.as_dict() for e in preview.emails],
         }
 

@@ -5,6 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.23] — 2026-05-15
+
+### Added
+
+- **Common attachment printing** — added Python-only best-effort conversion for PDF, DOCX/DOCM, ODT, RTF, TXT, HTML, Markdown, XLS/XLSX/ODS/CSV/TSV, PPTX/ODP, and common image files.
+- **Message-level IMAP printing** — added `print_bridge.process_imap_message` so one email's matching attachments are converted, merged, and submitted as one print job.
+- **Conversion metadata** — job history, status replies, and audit events now report source format, converted format, printed attachments, skipped attachments, and merged attachment count.
+
+### Changed
+
+- The bundled email blueprint now uses `process_imap_message` by default for faster multi-attachment emails.
+- `print_bridge.print_file` now accepts supported non-PDF local files and converts them before printing.
+- Booklet jobs no longer send an IPP `orientation-requested` override after landscape imposition, avoiding printers that rotate imposed booklets back to portrait.
+
+### Fixed
+
+- Legacy binary `.doc` and `.ppt` attachments are explicitly skipped with a clear unsupported-format error instead of failing silently.
+- Bumped package metadata to `0.1.23`.
+
+---
+
 ## [0.1.22] — 2026-05-14
 
 ### Added
@@ -278,6 +299,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.23]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.23
 [0.1.22]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.22
 [0.1.21]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.21
 [0.1.20]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.20

@@ -85,6 +85,7 @@ DUPLEX_MODES: dict[str, str] = {
 SERVICE_PRINT_FILE = "print_file"
 SERVICE_CLEAR_QUEUE = "clear_queue"
 SERVICE_PROCESS_IMAP_PART = "process_imap_part"
+SERVICE_PROCESS_IMAP_MESSAGE = "process_imap_message"
 SERVICE_CHECK_FILTER = "check_filter"
 SERVICE_CHECK_PRINTER_CAPABILITIES = "check_printer_capabilities"
 SERVICE_RETRY_JOB = "retry_job"

@@ -1,11 +1,23 @@
 {
   "domain": "print_bridge",
   "name": "Print Bridge",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "config_flow": true,
   "documentation": "https://github.com/rubeecube/ha-print-bridge",
   "issue_tracker": "https://github.com/rubeecube/ha-print-bridge/issues",
-  "requirements": ["pypdf>=4.0.0", "pypdfium2>=4.30.0"],
+  "requirements": [
+    "beautifulsoup4>=4.12.0",
+    "markdown>=3.5",
+    "odfpy>=1.4.1",
+    "openpyxl>=3.1.0",
+    "pypdf>=4.0.0",
+    "pypdfium2>=4.30.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=1.0.0",
+    "reportlab>=4.0.0",
+    "striprtf>=0.0.26",
+    "xlrd>=2.0.0"
+  ],
   "after_dependencies": ["imap", "zeroconf"],
   "codeowners": ["@rubeecube"],
   "iot_class": "local_push"

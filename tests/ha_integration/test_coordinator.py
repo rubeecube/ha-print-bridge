@@ -1,8 +1,8 @@
 """Coordinator event-handling tests for the Print Bridge integration.
 
 Covers:
-  - imap_content event with a PDF part triggers _async_fetch_and_print.
-  - Non-PDF parts are skipped.
+  - imap_content event with printable parts triggers message-level printing.
+  - Unsupported parts are skipped.
   - Sender and folder filtering.
   - Schedule queue: jobs queued outside window, flushed when window opens.
   - Email post-processing: called after immediate print; skipped when queued.
@@ -25,7 +25,7 @@ from aiohttp import web
 import pytest
 from homeassistant.core import Event, HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.print_bridge.const import CONF_DIRECT_PRINTER_URL, DOMAIN
@@ -186,13 +186,16 @@ async def _start_fake_ipp_server(status_code: int = 0x0000):
 
 
 def _register_fake_imap_fetch_part(hass: HomeAssistant) -> None:
+    pdf_data = _make_a4_pdf(page_count=1)
+
     async def _fetch_part(call: ServiceCall) -> dict:
         assert call.data["entry"] == "imap_entry_1"
         assert call.data["uid"] == "99"
         assert call.data["part"] == "1"
         return {
-            "part_data": base64.b64encode(_FAKE_PDF).decode(),
+            "part_data": base64.b64encode(pdf_data).decode(),
             "content_transfer_encoding": "base64",
+            "content_type": "application/pdf",
         }
 
     hass.services.async_register(
@@ -209,39 +212,49 @@ def _register_fake_imap_fetch_part(hass: HomeAssistant) -> None:
 
 async def test_pdf_event_triggers_fetch_and_print(hass: HomeAssistant) -> None:
     _, coordinator = await _setup_coordinator(hass)
-    success = PrintJobResult(filename="document.pdf", success=True)
+    success = PrintJobResult(
+        filename="document.pdf",
+        success=True,
+        merged_attachment_count=1,
+    )
 
     with (
-        patch.object(coordinator, "_async_fetch_and_print",
-                     new=AsyncMock(return_value=success)) as mock_fetch,
+        patch.object(coordinator, "async_process_imap_message",
+                     new=AsyncMock(return_value=success)) as mock_process,
         patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
     ):
         await coordinator.async_handle_imap_event(_event(parts=_pdf_parts()))
 
-    mock_fetch.assert_called_once_with(
-        entry_id="imap_entry_1", uid="99", part_key="1",
-        filename="document.pdf", sender="sender@example.com",
+    mock_process.assert_called_once_with(
+        entry_id="imap_entry_1",
+        uid="99",
+        parts=_pdf_parts(),
+        sender="sender@example.com",
+        attachment_filter=None,
         duplex_override=None,
         booklet_override=None,
         copies=None,
         orientation=None,
         media=None,
         raster_dpi=None,
+        mail_subject="",
+        mail_text="",
     )
 
 
 async def test_pdf_event_records_success(hass: HomeAssistant) -> None:
     _, coordinator = await _setup_coordinator(hass)
-    success = PrintJobResult(filename="doc.pdf", success=True)
+    success = PrintJobResult(filename="doc.pdf", success=True, merged_attachment_count=1)
 
     with (
-        patch.object(coordinator, "_async_fetch_and_print",
-                     new=AsyncMock(return_value=success)),
-        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+        patch.object(coordinator, "async_process_imap_message",
+                     new=AsyncMock(return_value=success)) as mock_process,
+        patch.object(coordinator, "_async_post_process_email", new=AsyncMock()) as mock_post,
     ):
         await coordinator.async_handle_imap_event(_event(parts=_pdf_parts()))
 
-    assert coordinator._job_history[0].success is True
+    mock_process.assert_awaited_once()
+    mock_post.assert_awaited_once_with("imap_entry_1", "99")
 
 
 async def test_pdf_event_records_failure(hass: HomeAssistant) -> None:
@@ -249,24 +262,25 @@ async def test_pdf_event_records_failure(hass: HomeAssistant) -> None:
     failure = PrintJobResult(filename="doc.pdf", success=False, error="HTTP 500")
 
     with (
-        patch.object(coordinator, "_async_fetch_and_print",
-                     new=AsyncMock(return_value=failure)),
-        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+        patch.object(coordinator, "async_process_imap_message",
+                     new=AsyncMock(return_value=failure)) as mock_process,
+        patch.object(coordinator, "_async_post_process_email", new=AsyncMock()) as mock_post,
     ):
         await coordinator.async_handle_imap_event(_event(parts=_pdf_parts()))
 
-    assert coordinator._job_history[0].success is False
+    mock_process.assert_awaited_once()
+    mock_post.assert_not_awaited()
 
 
 async def test_mail_params_override_imap_event_print_settings(
     hass: HomeAssistant,
 ) -> None:
     _, coordinator = await _setup_coordinator(hass)
-    success = PrintJobResult(filename="doc.pdf", success=True)
+    success = PrintJobResult(filename="doc.pdf", success=True, merged_attachment_count=1)
 
     with (
-        patch.object(coordinator, "_async_fetch_and_print",
-                     new=AsyncMock(return_value=success)) as mock_fetch,
+        patch.object(coordinator, "async_process_imap_message",
+                     new=AsyncMock(return_value=success)) as mock_process,
         patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
     ):
         await coordinator.async_handle_imap_event(
@@ -277,19 +291,22 @@ async def test_mail_params_override_imap_event_print_settings(
             )
         )
 
-    mock_fetch.assert_called_once_with(
-        entry_id="imap_entry_1",
-        uid="99",
-        part_key="1",
-        filename="Au Puits booklet.pdf",
-        sender="sender@example.com",
-        duplex_override="two-sided-short-edge",
-        booklet_override=True,
-        copies=2,
-        orientation="landscape",
-        media="iso_a4_210x297mm",
-        raster_dpi=150,
-    )
+    mock_process.assert_called_once()
+    assert mock_process.call_args.kwargs == {
+        "entry_id": "imap_entry_1",
+        "uid": "99",
+        "parts": _pdf_parts("Au Puits booklet.pdf"),
+        "sender": "sender@example.com",
+        "attachment_filter": None,
+        "duplex_override": "two-sided-short-edge",
+        "booklet_override": True,
+        "copies": 2,
+        "orientation": "landscape",
+        "media": "iso_a4_210x297mm",
+        "raster_dpi": 150,
+        "mail_subject": "[pb duplex=short-edge copies=2 dpi=150]",
+        "mail_text": "Print-Bridge: booklet=true; paper=a4; orientation=landscape",
+    }
 
 
 async def test_mail_attachment_filter_skips_non_matching_pdfs(
@@ -303,34 +320,35 @@ async def test_mail_attachment_filter_skips_non_matching_pdfs(
     }
 
     with (
-        patch.object(coordinator, "_async_fetch_and_print",
-                     new=AsyncMock(return_value=PrintJobResult(filename="Au Puits.pdf", success=True))) as mock_fetch,
+        patch.object(coordinator, "async_process_imap_message",
+                     new=AsyncMock(return_value=PrintJobResult(filename="Au Puits.pdf", success=True))) as mock_process,
         patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
     ):
         await coordinator.async_handle_imap_event(
             _event(parts=parts, text="PB: attachment='Au Puits'")
         )
 
-    mock_fetch.assert_called_once()
-    assert mock_fetch.call_args.kwargs["part_key"] == "2"
+    mock_process.assert_called_once()
+    assert mock_process.call_args.kwargs["parts"] == parts
+    assert mock_process.call_args.kwargs["attachment_filter"] == "Au Puits"
 
 
 # ---------------------------------------------------------------------------
-# Non-PDF parts are skipped
+# Unsupported parts are skipped
 # ---------------------------------------------------------------------------
 
-async def test_non_pdf_attachment_not_fetched(hass: HomeAssistant) -> None:
+async def test_unsupported_attachment_not_fetched(hass: HomeAssistant) -> None:
     _, coordinator = await _setup_coordinator(hass)
-    txt_parts = {"1": {"content_type": "text/plain", "filename": "notes.txt"}}
+    json_parts = {"1": {"content_type": "application/json", "filename": "notes.json"}}
 
     with (
-        patch.object(coordinator, "_async_fetch_and_print",
-                     new=AsyncMock()) as mock_fetch,
+        patch.object(coordinator, "async_process_imap_message",
+                     new=AsyncMock()) as mock_process,
         patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
     ):
-        await coordinator.async_handle_imap_event(_event(parts=txt_parts))
+        await coordinator.async_handle_imap_event(_event(parts=json_parts))
 
-    mock_fetch.assert_not_called()
+    mock_process.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -344,14 +362,14 @@ async def test_allowed_sender_is_processed(hass: HomeAssistant) -> None:
     success = PrintJobResult(filename="d.pdf", success=True)
 
     with (
-        patch.object(coordinator, "_async_fetch_and_print",
-                     new=AsyncMock(return_value=success)) as mock_fetch,
+        patch.object(coordinator, "async_process_imap_message",
+                     new=AsyncMock(return_value=success)) as mock_process,
         patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
     ):
         await coordinator.async_handle_imap_event(
             _event(sender="sender@example.com", parts=_pdf_parts())
         )
-    mock_fetch.assert_called_once()
+    mock_process.assert_called_once()
 
 
 async def test_disallowed_sender_is_skipped(hass: HomeAssistant) -> None:
@@ -359,12 +377,12 @@ async def test_disallowed_sender_is_skipped(hass: HomeAssistant) -> None:
         hass, options={**MOCK_OPTIONS, "allowed_senders": ["allowed@example.com"]}
     )
 
-    with patch.object(coordinator, "_async_fetch_and_print",
-                      new=AsyncMock()) as mock_fetch:
+    with patch.object(coordinator, "async_process_imap_message",
+                      new=AsyncMock()) as mock_process:
         await coordinator.async_handle_imap_event(
             _event(sender="attacker@evil.com", parts=_pdf_parts())
         )
-    mock_fetch.assert_not_called()
+    mock_process.assert_not_called()
 
 
 async def test_empty_allowed_senders_accepts_all(hass: HomeAssistant) -> None:
@@ -374,14 +392,14 @@ async def test_empty_allowed_senders_accepts_all(hass: HomeAssistant) -> None:
     success = PrintJobResult(filename="d.pdf", success=True)
 
     with (
-        patch.object(coordinator, "_async_fetch_and_print",
-                     new=AsyncMock(return_value=success)) as mock_fetch,
+        patch.object(coordinator, "async_process_imap_message",
+                     new=AsyncMock(return_value=success)) as mock_process,
         patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
     ):
         await coordinator.async_handle_imap_event(
             _event(sender="anyone@anywhere.com", parts=_pdf_parts())
         )
-    mock_fetch.assert_called_once()
+    mock_process.assert_called_once()
 
 
 async def test_display_name_sender_is_processed(hass: HomeAssistant) -> None:
@@ -392,14 +410,14 @@ async def test_display_name_sender_is_processed(hass: HomeAssistant) -> None:
     success = PrintJobResult(filename="d.pdf", success=True)
 
     with (
-        patch.object(coordinator, "_async_fetch_and_print",
-                     new=AsyncMock(return_value=success)) as mock_fetch,
+        patch.object(coordinator, "async_process_imap_message",
+                     new=AsyncMock(return_value=success)) as mock_process,
         patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
     ):
         await coordinator.async_handle_imap_event(
             _event(sender="Sender Name <sender@example.com>", parts=_pdf_parts())
         )
-    mock_fetch.assert_called_once()
+    mock_process.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -423,12 +441,12 @@ async def test_job_queued_outside_schedule(hass: HomeAssistant) -> None:
             "custom_components.print_bridge.coordinator.AutoPrintCoordinator._is_within_schedule",
             return_value=False,
         ),
-        patch.object(coordinator, "_async_fetch_and_print", new=AsyncMock()) as mock_fetch,
+        patch.object(coordinator, "async_process_imap_message", new=AsyncMock()) as mock_process,
         patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
     ):
         await coordinator.async_handle_imap_event(_event(parts=_pdf_parts("queued.pdf")))
 
-    mock_fetch.assert_not_called()
+    mock_process.assert_not_called()
     assert len(coordinator._pending_jobs) == 1
     assert coordinator._pending_jobs[0].filename == "queued.pdf"
 
@@ -577,11 +595,11 @@ async def test_auto_flush_on_startup_with_pending(hass: HomeAssistant) -> None:
 async def test_post_process_called_after_immediate_print(hass: HomeAssistant) -> None:
     """Post-processing must run when a job is printed immediately (not queued)."""
     _, coordinator = await _setup_coordinator(hass)
-    success = PrintJobResult(filename="doc.pdf", success=True)
+    success = PrintJobResult(filename="doc.pdf", success=True, merged_attachment_count=1)
 
     with (
         patch.object(coordinator, "_is_within_schedule", return_value=True),
-        patch.object(coordinator, "_async_fetch_and_print",
+        patch.object(coordinator, "async_process_imap_message",
                      new=AsyncMock(return_value=success)),
         patch.object(coordinator, "_async_post_process_email", new=AsyncMock()) as mock_pp,
         patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
@@ -597,13 +615,13 @@ async def test_post_process_skipped_when_all_jobs_queued(hass: HomeAssistant) ->
 
     with (
         patch.object(coordinator, "_is_within_schedule", return_value=False),
-        patch.object(coordinator, "_async_fetch_and_print", new=AsyncMock()) as mock_fetch,
+        patch.object(coordinator, "async_process_imap_message", new=AsyncMock()) as mock_process,
         patch.object(coordinator, "_async_post_process_email", new=AsyncMock()) as mock_pp,
         patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
     ):
         await coordinator.async_handle_imap_event(_event(parts=_pdf_parts()))
 
-    mock_fetch.assert_not_called()
+    mock_process.assert_not_called()
     mock_pp.assert_not_called()  # must NOT run — email not yet printed
 
 
@@ -687,6 +705,87 @@ async def test_status_reply_falls_back_to_imap_account_smtp(
     assert mock_send.call_args.kwargs["port"] == 465
     assert mock_send.call_args.kwargs["sender"] == "print@example.com"
     assert mock_send.call_args.kwargs["recipient"] == "sender@example.com"
+
+
+async def test_process_imap_message_merges_printable_attachments_into_one_job(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+    pdf_data = _make_a4_pdf(page_count=1)
+    parts = {
+        "1": {"content_type": "application/pdf", "filename": "first.pdf"},
+        "2": {"content_type": "text/plain", "filename": "notes.txt"},
+    }
+
+    async def _fetch_part(call: ServiceCall) -> dict:
+        payload = pdf_data if call.data["part"] == "1" else b"hello from text"
+        return {
+            "part_data": base64.b64encode(payload).decode(),
+            "content_transfer_encoding": "base64",
+            "content_type": parts[call.data["part"]]["content_type"],
+        }
+
+    hass.services.async_register(
+        "imap",
+        "fetch_part",
+        _fetch_part,
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    send_result = PrintJobResult(filename="message.pdf", success=True)
+    with (
+        patch.object(
+            coordinator,
+            "async_send_print_job",
+            new=AsyncMock(return_value=send_result),
+        ) as mock_send,
+        patch.object(coordinator, "_async_send_status_reply", new=AsyncMock()),
+        patch.object(coordinator, "_async_notify_job", new=AsyncMock()),
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        result = await coordinator.async_process_imap_message(
+            entry_id="imap_entry_1",
+            uid="99",
+            parts=parts,
+            sender="sender@example.com",
+            mail_subject="Combined job",
+            mail_text="",
+        )
+
+    mock_send.assert_awaited_once()
+    merged_pdf = mock_send.call_args.args[1]
+    assert len(PdfReader(io.BytesIO(merged_pdf)).pages) == 2
+    assert result.attachments == ["first.pdf", "notes.txt"]
+    assert result.merged_attachment_count == 2
+    assert result.source_format == "mixed"
+
+
+async def test_process_imap_message_reports_skipped_unsupported_attachments(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+    parts = {
+        "1": {"content_type": "application/msword", "filename": "legacy.doc"},
+        "2": {"content_type": "application/json", "filename": "payload.json"},
+    }
+
+    with (
+        patch.object(coordinator, "_async_send_status_reply", new=AsyncMock()) as mock_reply,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        result = await coordinator.async_process_imap_message(
+            entry_id="imap_entry_1",
+            uid="99",
+            parts=parts,
+            sender="sender@example.com",
+            mail_subject="Unsupported",
+            mail_text="Print-Bridge: reply=true",
+        )
+
+    assert result.success is False
+    assert result.merged_attachment_count == 0
+    assert "legacy.doc" in result.skipped_attachments[0]
+    mock_reply.assert_awaited_once()
 
 
 async def test_process_imap_part_fetches_email_context_for_old_blueprints(
@@ -933,7 +1032,7 @@ async def test_direct_printer_timeout_after_post_is_treated_as_submitted(
     assert "http://printer.local:631/ipp/print" in result.error
     mock_booklet.assert_called_once_with(_FAKE_PDF)
     packet = mock_session.post.call_args.kwargs["data"]
-    assert _ipp_attr(0x23, "orientation-requested", struct.pack(">i", 4)) in packet
+    assert b"orientation-requested" not in packet
     assert b"print-scaling" in packet
     assert b"fit" in packet
 
@@ -1216,6 +1315,6 @@ async def test_imap_event_posts_pdf_to_fake_ipp_printer(
             f"ipp://{_LOOPBACK_HOST}:{port}/printers/TestPrinter".encode()
             in received["body"]
         )
-        assert received["body"].endswith(_FAKE_PDF)
+        assert received["body"].endswith(b"%%EOF\n")
     finally:
         await runner.cleanup()

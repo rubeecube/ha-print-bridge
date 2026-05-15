@@ -7,13 +7,13 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-154%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.22-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-167%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.23-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
 
-Print PDF email attachments directly to a network printer — fully inside Home Assistant.
+Print common email attachments directly to a network printer — fully inside Home Assistant.
 
 ### Supported platforms
 
@@ -30,9 +30,10 @@ Print PDF email attachments directly to a network printer — fully inside Home 
 > You can still configure a printer manually by typing its IPP URL.
 
 **Print Bridge** bridges HA's built-in IMAP integration with a CUPS print server.
-When an email with a PDF attachment arrives from a matching sender (and folder),
-the component fetches the bytes via `imap.fetch_part`, optionally reorders pages
-for booklet printing, and sends an IPP/2.0 `Print-Job` directly to CUPS.
+When an email with printable attachments arrives from a matching sender (and folder),
+the component fetches the bytes via `imap.fetch_part`, converts non-PDF files to
+an internal PDF, optionally reorders pages for booklet printing, and sends an
+IPP/2.0 `Print-Job` directly to CUPS or the printer.
 
 ---
 
@@ -44,6 +45,8 @@ for booklet printing, and sends an IPP/2.0 `Print-Job` directly to CUPS.
 | **Smart setup** | Auto-discovers CUPS printers; pre-fills sender from existing IMAP accounts |
 | **Sender filter** | Accept only specific email addresses, or leave empty to accept all |
 | **Folder filter** | Accept only emails arriving in specific IMAP folders (e.g. `INBOX/Print`) |
+| **Common document support** | Prints PDF, DOCX/DOCM, ODT, RTF, TXT, HTML, Markdown, XLS/XLSX/ODS/CSV/TSV, PPTX/ODP, and common image files |
+| **Combined email jobs** | Converts and merges matching attachments from one email into one print job for faster batches |
 | **Duplex control** | One-sided, long-edge (portrait), or short-edge (landscape) per job or globally |
 | **Booklet printing** | Automatic saddle-stitch page reordering for filenames matching a pattern |
 | **Audit log** | Every print job fires `print_bridge_job_completed` → appears in HA Logbook |
@@ -56,7 +59,7 @@ for booklet printing, and sends an IPP/2.0 `Print-Job` directly to CUPS.
 | **Queued job view/cancel** | Dashboard shows up to five scheduled jobs and can discard queued work before submission |
 | **Blueprint** | Advanced per-sender/per-keyword rules with folder, duplex, and booklet logic |
 | **Lovelace dashboard** | Paste-ready printer view plus detailed audit view |
-| **Services** | `print_file`, `clear_queue`, `process_imap_part`, `check_filter`, `print_email` |
+| **Services** | `print_file`, `clear_queue`, `process_imap_message`, `process_imap_part`, `check_filter`, `print_email` |
 
 ---
 
@@ -156,7 +159,10 @@ For any AirPrint / IPP-capable printer on your network (including most Canon PIX
 |---|---|
 | Direct IPP Printer URL | `http://printer.local/ipp/print` or `ipp://printer.local/ipp/print` |
 
-The integration sends an IPP `Print-Job` packet containing a PDF directly to the printer. No conversion layer is needed — modern AirPrint printers accept PDF natively. Leave the CUPS fields empty.
+The integration sends an IPP `Print-Job` packet directly to the printer. Modern
+AirPrint printers usually accept PDF natively; if a direct IPP printer advertises
+only PWG Raster or JPEG, Print Bridge converts the internal PDF to the accepted
+format before submission. Leave the CUPS fields empty.
 
 #### Option B — Via CUPS
 
@@ -248,9 +254,9 @@ Then go to **Settings → System → Logs** to view debug output. This shows eac
 | Entity | Type | State | Key attributes |
 |---|---|---|---|
 | `sensor.print_bridge_*_print_queue_depth` | Sensor | File count | — |
-| `sensor.print_bridge_*_last_print_job` | Sensor | `success` / `failed` | `last_filename`, `last_status`, `sender`, `duplex`, `booklet`, `timestamp` |
+| `sensor.print_bridge_*_last_print_job` | Sensor | `success` / `failed` | `last_filename`, `last_status`, `sender`, `duplex`, `booklet`, `source_format`, `converted_format`, `attachments`, `skipped_attachments`, `timestamp` |
 | `sensor.print_bridge_*_job_log` | Sensor | Total jobs sent | `jobs[]` — last 50 print attempts with full metadata |
-| `sensor.print_bridge_*_filter_preview` | Sensor | Matching emails with PDF | `emails[]`, `checked_at`, `imap_account`, `total_found`, `matching_filter`, `with_pdf` |
+| `sensor.print_bridge_*_filter_preview` | Sensor | Matching emails with printable attachments | `emails[]`, `checked_at`, `imap_account`, `total_found`, `matching_filter`, `with_pdf`, `with_printable` |
 | `sensor.print_bridge_*_scheduled_queue` | Sensor | Queued job count | `jobs[]` shows up to 5 waiting jobs, plus `total_jobs`, `shown_jobs`, schedule settings |
 | `binary_sensor.print_bridge_*_printer_online` | Binary Sensor | `on` / `off` | — |
 | `select.print_bridge_*_imap_account` | Select | Selected IMAP account | Used by **Check Filter** and on-demand email printing when no account is specified |
@@ -269,13 +275,30 @@ Then go to **Settings → System → Logs** to view debug output. This shows eac
 
 ## Services
 
+### Supported files
+
+Print Bridge converts supported non-PDF inputs to an internal PDF before the
+existing booklet, CUPS/direct IPP, raster, status reply, queue, and audit
+pipeline runs. Conversion is best effort: readable content, basic tables, sheet
+names, slide text, and image pages are preserved, but Office-perfect pagination,
+macros, charts, embedded objects, headers/footers, and complex layout are not
+guaranteed.
+
+Supported: `.pdf`, `.docx`, `.docm`, `.odt`, `.rtf`, `.txt`, `.html`, `.htm`,
+`.md`, `.xlsx`, `.xlsm`, `.xls`, `.ods`, `.csv`, `.tsv`, `.pptx`, `.odp`,
+`.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`, `.bmp`, `.webp`.
+
+Explicitly unsupported: legacy binary `.doc` and `.ppt` files. These need an
+external office engine such as LibreOffice, which Print Bridge does not bundle.
+
 ### `print_bridge.print_file`
 
-Print a PDF from the HA filesystem.
+Print a supported file from the HA filesystem. Non-PDF files are converted to an
+internal PDF first.
 
 | Field | Required | Description |
 |---|---|---|
-| `file_path` | yes | Absolute path to the PDF |
+| `file_path` | yes | Absolute path to the supported file |
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
 | `copies` | no | Number of copies, 1-20 |
@@ -309,9 +332,34 @@ Used internally by the blueprint; callable from any automation or script.
 | `mail_subject` | no | Original email subject, used for mail parameters and reply title |
 | `mail_text` | no | Original plain-text email body, used for mail parameters |
 
+### `print_bridge.process_imap_message`
+
+Fetch all supported attachments from an IMAP message, convert them to PDF, merge
+them in email attachment order, and submit one print job. This is the default
+path used by the bundled blueprint because it is faster when one email has
+multiple attachments.
+
+| Field | Required | Description |
+|---|---|---|
+| `entry_id` | yes | IMAP config entry ID (`trigger.event.data.entry_id`) |
+| `uid` | yes | Email UID (`trigger.event.data.uid`) |
+| `parts` | no | Parts dictionary from `trigger.event.data.parts`; avoids one metadata fetch |
+| `duplex` | no | Override duplex for this job |
+| `booklet` | no | Force booklet page reordering |
+| `attachment_filter` | no | Only include attachment filenames containing this text |
+| `copies` | no | Number of copies, 1-20 |
+| `orientation` | no | `portrait` or `landscape`; booklet imposition is landscape |
+| `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
+| `raster_dpi` | no | Direct IPP raster conversion DPI, 72-600. Lower is faster; default is `150`. |
+| `sender` | no | Original email sender, used for status replies |
+| `mail_subject` | no | Original email subject, used for mail parameters and reply title |
+| `mail_text` | no | Original plain-text email body, used for mail parameters |
+
 ### `print_bridge.print_email`
 
-Print all PDF attachments from a specific email in your mailbox — on demand, without waiting for the email to arrive again. Get the UID from the Lovelace email table or the `filter_preview` sensor.
+Print all supported attachments from a specific email in your mailbox as one
+combined job — on demand, without waiting for the email to arrive again. Get the
+UID from the Lovelace email table or the `filter_preview` sensor.
 
 | Field | Required | Description |
 |---|---|---|
@@ -352,7 +400,7 @@ Supported parameters:
 | `paper` / `media` | `a4`, `letter`, `legal`, or a raw IPP media keyword |
 | `dpi` / `raster_dpi` | `72` through `600`; only used when direct IPP requires raster conversion |
 | `quality` | `draft`, `fast`, `normal`, `high`, or `best` (`fast` maps to 150 DPI) |
-| `attachment` / `attachment_filter` / `file` | Filename substring to print only matching PDFs |
+| `attachment` / `attachment_filter` / `file` | Filename substring to print only matching attachments |
 | `reply` / `status_reply` | `true` to request a status reply, `false` to suppress one |
 
 Status replies include the IPP status code plus the effective printer settings used for each job. Print Bridge uses the configured Home Assistant notify service when set (for example `notify.smtp`); otherwise it attempts SMTP delivery through the matching HA IMAP account.
@@ -455,16 +503,13 @@ imap_content event received
         │
         ├─ subject contains filter? (empty = yes) ───── no ──► skip
         │
-        ├─ any PDF part? ────────────────────────────── no ──► skip
+        ├─ any printable attachment? ───────────────── no ──► skip
         │
-        └─ for each PDF part:
-                 is_booklet = subject has booklet keyword
-                              OR sender in booklet_senders
-                 duplex     = two-sided-short-edge  if is_booklet
-                            = one-sided             if subject has one-sided keyword
-                            = two-sided-long-edge   if subject has two-sided keyword
-                            = default_duplex        otherwise
-                 ──► print_bridge.process_imap_part(duplex, booklet)
+        └─ convert matching attachments to PDF
+                 apply mail parameters / blueprint settings
+                 merge attachments into one job
+                 apply booklet imposition after merge
+                 ──► print_bridge.process_imap_message(duplex, booklet)
                  ──► imap.seen  (if mark_as_seen)
 ```
 

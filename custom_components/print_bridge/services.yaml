@@ -1,7 +1,8 @@
 print_email:
   name: Print Email
   description: >-
-    Print all PDF attachments from a specific email in your mailbox.
+    Print all supported attachments from a specific email in your mailbox as one
+    combined job.
     Use the email's UID shown in the Filter Preview sensor or in the audit
     Lovelace view.  Perfect for on-demand printing from the dashboard.
   fields:
@@ -45,7 +46,7 @@ print_email:
         boolean:
     attachment_filter:
       name: Attachment Filter
-      description: Optional filename substring; only matching PDF attachments print.
+      description: Optional filename substring; only matching printable attachments are included.
       required: false
       selector:
         text:
@@ -90,14 +91,14 @@ print_email:
 print_file:
   name: Print File
   description: >-
-    Send a PDF file from the Home Assistant filesystem to the selected target
-    printer.
+    Send a supported file from the Home Assistant filesystem to the selected
+    target printer. Non-PDF files are converted to an internal PDF first.
   fields:
     file_path:
       name: File Path
-      description: Absolute path to the PDF file on the Home Assistant filesystem.
+      description: Absolute path to a supported file on the Home Assistant filesystem.
       required: true
-      example: /media/print_queue/document.pdf
+      example: /media/print_queue/document.docx
       selector:
         text:
     duplex:
@@ -241,7 +242,7 @@ check_printer_capabilities:
 process_imap_part:
   name: Process IMAP Email Part
   description: >-
-    Fetch a specific PDF attachment from an IMAP message and send it to the
+    Fetch a specific supported attachment from an IMAP message and send it to the
     selected target printer.  Intended to be called from automations and blueprints after an
     imap_content event.  Allows per-job overrides for duplex and booklet mode.
   fields:
@@ -297,7 +298,7 @@ process_imap_part:
         boolean:
     attachment_filter:
       name: Attachment Filter
-      description: Optional filename substring; only matching PDF attachments print.
+      description: Optional filename substring; only matching printable attachments print.
       required: false
       selector:
         text:
@@ -313,6 +314,117 @@ process_imap_part:
     orientation:
       name: Orientation
       description: Request portrait or landscape output. Booklet jobs always request landscape.
+      required: false
+      selector:
+        select:
+          options:
+            - label: "Portrait"
+              value: "portrait"
+            - label: "Landscape"
+              value: "landscape"
+    media:
+      name: Paper Size / Media
+      description: IPP media keyword, such as iso_a4_210x297mm or na_letter_8.5x11in.
+      required: false
+      selector:
+        text:
+    raster_dpi:
+      name: Raster DPI
+      description: >-
+        DPI used when a direct IPP printer requires PDF-to-raster conversion.
+        Lower values are faster and create smaller jobs; 150 is a good fast default.
+      required: false
+      selector:
+        number:
+          min: 72
+          max: 600
+          mode: box
+    sender:
+      name: Sender
+      description: Original email sender; used for optional status replies.
+      required: false
+      selector:
+        text:
+    mail_subject:
+      name: Mail Subject
+      description: Original email subject; used for mail print parameters and reply subject.
+      required: false
+      selector:
+        text:
+    mail_text:
+      name: Mail Text
+      description: Original plain-text email body; used for mail print parameters.
+      required: false
+      selector:
+        text:
+
+process_imap_message:
+  name: Process IMAP Email Message
+  description: >-
+    Fetch all supported attachments from one IMAP message, convert each to PDF,
+    merge them in attachment order, and submit one print job. Unsupported or
+    failed attachments are skipped and reported in status replies and audit logs.
+  fields:
+    entry_id:
+      name: IMAP Entry ID
+      description: >-
+        The entry_id of the IMAP config entry that received the email.
+        Available as trigger.event.data.entry_id in automations.
+      required: true
+      selector:
+        text:
+    uid:
+      name: Email UID
+      description: The IMAP UID of the message (trigger.event.data.uid).
+      required: true
+      selector:
+        text:
+    parts:
+      name: IMAP Parts
+      description: >-
+        Optional parts dictionary from trigger.event.data.parts. Passing it avoids
+        one extra IMAP metadata fetch.
+      required: false
+      selector:
+        object:
+    duplex:
+      name: Duplex Mode
+      description: Override the integration's default duplex mode for this job.
+      required: false
+      selector:
+        select:
+          options:
+            - label: "One-sided"
+              value: "one-sided"
+            - label: "Two-sided — portrait (long edge)"
+              value: "two-sided-long-edge"
+            - label: "Two-sided — landscape (short edge)"
+              value: "two-sided-short-edge"
+    booklet:
+      name: Booklet Mode
+      description: Reorder pages for saddle-stitch booklet printing.
+      required: false
+      default: false
+      selector:
+        boolean:
+    attachment_filter:
+      name: Attachment Filter
+      description: Optional filename substring; only matching printable attachments print.
+      required: false
+      selector:
+        text:
+    copies:
+      name: Copies
+      description: Number of copies to request from the printer.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: box
+    orientation:
+      name: Orientation
+      description: Request portrait or landscape output. Booklet jobs are imposed in landscape.
       required: false
       selector:
         select:

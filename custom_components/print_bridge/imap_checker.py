@@ -9,7 +9,14 @@ from __future__ import annotations
 import email as email_module
 import imaplib
 import logging
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
+
+from .document_converter import (
+    SUPPORTED_PRINTABLE_EXTENSIONS,
+    SUPPORTED_PRINTABLE_MIME_TYPES,
+    UNSUPPORTED_PRINTABLE_EXTENSIONS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +37,12 @@ class EmailPreview:
     has_pdf: bool
     pdf_count: int
     matches_filter: bool   # True if sender is in allowed_senders (or list is empty)
+    has_printable: bool | None = None
+    printable_count: int | None = None
 
     def as_dict(self) -> dict:
+        has_printable = self.has_pdf if self.has_printable is None else self.has_printable
+        printable_count = self.pdf_count if self.printable_count is None else self.printable_count
         return {
             "uid": self.uid,
             "subject": self.subject,
@@ -40,6 +51,8 @@ class EmailPreview:
             "folder": self.folder,
             "has_pdf": self.has_pdf,
             "pdf_count": self.pdf_count,
+            "has_printable": has_printable,
+            "printable_count": printable_count,
             "matches_filter": self.matches_filter,
         }
 
@@ -154,6 +167,8 @@ def _build_preview(
         # Fetch BODYSTRUCTURE to count PDF parts without downloading payloads.
         has_pdf = False
         pdf_count = 0
+        has_printable = False
+        printable_count = 0
         status2, bdata = mail.uid("fetch", uid, "(BODYSTRUCTURE)")
         if status2 == "OK" and bdata and bdata[0] is not None:
             body_raw = bdata[0][1] if isinstance(bdata[0], tuple) else bdata[0]
@@ -162,8 +177,13 @@ def _build_preview(
                 if isinstance(body_raw, bytes)
                 else str(bdata)
             ).lower()
-            pdf_count = body_str.count("application/pdf")
+            pdf_count = max(
+                _count_bodystructure_mime(body_str, "application/pdf"),
+                body_str.count(".pdf"),
+            )
             has_pdf = pdf_count > 0
+            printable_count = _count_printable_bodystructure(body_str)
+            has_printable = printable_count > 0
 
         return EmailPreview(
             uid=uid,
@@ -174,6 +194,8 @@ def _build_preview(
             has_pdf=has_pdf,
             pdf_count=pdf_count,
             matches_filter=matches,
+            has_printable=has_printable,
+            printable_count=printable_count,
         )
 
     except Exception:
@@ -203,3 +225,33 @@ def _decode_header(value: str) -> str:
         )
     except Exception:
         return value
+
+
+def _count_printable_bodystructure(body_str: str) -> int:
+    """Best-effort count of printable attachments from IMAP BODYSTRUCTURE text."""
+    mime_count = sum(
+        _count_bodystructure_mime(body_str, mime)
+        for mime in SUPPORTED_PRINTABLE_MIME_TYPES
+    )
+    extension_count = sum(
+        body_str.count(ext)
+        for ext in (
+            SUPPORTED_PRINTABLE_EXTENSIONS + UNSUPPORTED_PRINTABLE_EXTENSIONS
+        )
+    )
+    return max(mime_count, extension_count)
+
+
+def _count_bodystructure_mime(body_str: str, mime: str) -> int:
+    """Count MIME types in slash or BODYSTRUCTURE split-token form."""
+    major, _, subtype = mime.partition("/")
+    if not subtype:
+        return body_str.count(mime)
+    slash_count = body_str.count(mime)
+    split_count = len(
+        re.findall(
+            rf'"?{re.escape(major)}"?\s+"?{re.escape(subtype)}"?',
+            body_str,
+        )
+    )
+    return max(slash_count, split_count)
