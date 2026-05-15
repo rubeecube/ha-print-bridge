@@ -1,7 +1,7 @@
 blueprint:
   name: "Print Bridge — Email to Printer"
   description: >
-    Print PDF email attachments directly from your mailbox.
+    Print common email attachments directly from your mailbox.
 
     Triggers on every new email from the selected IMAP account.
     Optionally filters by sender, subject, or attachment name.
@@ -51,8 +51,8 @@ blueprint:
     attachment_filter:
       name: Attachment name contains (optional)
       description: >
-        Only print PDF attachments whose filename contains this text
-        (case-insensitive). Leave empty to print all PDF attachments.
+        Only print supported attachments whose filename contains this text
+        (case-insensitive). Leave empty to print all printable attachments.
 
         Example: `invoice`
       default: ""
@@ -135,47 +135,70 @@ condition:
       {{ subject_filter | trim == ''
          or subject_filter | lower | trim in _subject }}
 
-  - alias: "Email has at least one PDF attachment"
+  - alias: "Email has at least one printable attachment"
     condition: template
     value_template: >
-      {% set ns = namespace(has_pdf=false) %}
+      {% set printable_mimes = [
+        'application/pdf',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-word.document.macroenabled.12',
+        'application/vnd.oasis.opendocument.text',
+        'application/rtf',
+        'text/rtf',
+        'text/plain',
+        'text/html',
+        'text/markdown',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel.sheet.macroenabled.12',
+        'application/vnd.ms-excel',
+        'application/vnd.oasis.opendocument.spreadsheet',
+        'text/csv',
+        'text/tab-separated-values',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/vnd.oasis.opendocument.presentation',
+        'image/jpeg',
+        'image/png',
+        'image/tiff',
+        'image/bmp',
+        'image/webp'
+      ] %}
+      {% set printable_exts = [
+        '.pdf', '.docx', '.docm', '.odt', '.rtf', '.txt', '.html', '.htm', '.md',
+        '.xlsx', '.xlsm', '.xls', '.ods', '.csv', '.tsv', '.pptx', '.odp',
+        '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.webp',
+        '.doc', '.ppt'
+      ] %}
+      {% set ns = namespace(has_printable=false) %}
       {% for part in _parts.values() %}
-        {% if (part.content_type | string | lower).split(';')[0] | trim == 'application/pdf' %}
-          {% set ns.has_pdf = true %}
+        {% set ctype = (part.content_type | string | lower).split(';')[0] | trim %}
+        {% set filename = (part.filename or part.get('file_name', '') or '') | lower %}
+        {% if ctype in printable_mimes %}
+          {% set ns.has_printable = true %}
+        {% else %}
+          {% for ext in printable_exts %}
+            {% if filename.endswith(ext) %}
+              {% set ns.has_printable = true %}
+            {% endif %}
+          {% endfor %}
         {% endif %}
       {% endfor %}
-      {{ ns.has_pdf }}
+      {{ ns.has_printable }}
 
 # ── Actions ─────────────────────────────────────────────────────────────────
 
 action:
-  - alias: "Print each matching PDF attachment"
-    repeat:
-      for_each: "{{ _parts | dictsort }}"
-      sequence:
-        - condition: template
-          value_template: >
-            {{ (repeat.item[1].content_type | string | lower).split(';')[0] | trim
-               == 'application/pdf' }}
-
-        - variables:
-            _filename: >
-              {{ repeat.item[1].filename
-                 or repeat.item[1].get('file_name', '')
-                 or ('attachment_' ~ repeat.item[0] ~ '.pdf') }}
-
-        - action: print_bridge.process_imap_part
-          data:
-            entry_id: "{{ trigger.event.data.entry_id }}"
-            uid: "{{ _uid }}"
-            part_key: "{{ repeat.item[0] }}"
-            filename: "{{ _filename }}"
-            duplex: "{{ _effective_duplex }}"
-            booklet: "{{ booklet }}"
-            attachment_filter: "{{ attachment_filter }}"
-            sender: "{{ trigger.event.data.sender }}"
-            mail_subject: "{{ trigger.event.data.subject }}"
-            mail_text: "{{ trigger.event.data.text | default('') }}"
+  - alias: "Print matching printable attachments as one job"
+    action: print_bridge.process_imap_message
+    data:
+      entry_id: "{{ trigger.event.data.entry_id }}"
+      uid: "{{ _uid }}"
+      parts: "{{ _parts }}"
+      duplex: "{{ _effective_duplex }}"
+      booklet: "{{ booklet }}"
+      attachment_filter: "{{ attachment_filter }}"
+      sender: "{{ trigger.event.data.sender }}"
+      mail_subject: "{{ trigger.event.data.subject }}"
+      mail_text: "{{ trigger.event.data.text | default('') }}"
 
   - alias: "Mark email as seen (optional)"
     if:

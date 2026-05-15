@@ -35,6 +35,15 @@ from homeassistant.helpers.template import Template
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .booklet_maker import create_booklet
+from .document_converter import (
+    AttachmentConversionSummary,
+    DocumentConversionError,
+    UnsupportedDocumentError,
+    convert_document_to_pdf,
+    is_printable_attachment,
+    merge_pdf_documents,
+    printable_type,
+)
 from .const import (
     CONF_ALLOWED_SENDERS,
     CONF_AUTO_DELETE,
@@ -211,10 +220,33 @@ def _send_status_email_smtp(
         smtp.send_message(email)
 
 
-def _is_pdf_part(part_info: dict[str, Any]) -> bool:
-    """Return True if an IMAP part metadata dict describes a PDF attachment."""
-    content_type = str(part_info.get("content_type", ""))
-    return content_type.split(";", 1)[0].strip().lower() == "application/pdf"
+def _attachment_filename(part_key: str, part_info: dict[str, Any]) -> str:
+    """Return a cleaned attachment filename from IMAP part metadata."""
+    return _decode_mime_filename(
+        part_info.get("filename")
+        or part_info.get("file_name")
+        or f"attachment_{part_key}"
+    )
+
+
+def _is_printable_part(part_key: str, part_info: dict[str, Any]) -> bool:
+    """Return True for supported or known unsupported printable attachments."""
+    return is_printable_attachment(
+        _attachment_filename(part_key, part_info),
+        str(part_info.get("content_type", "")),
+        include_unsupported=True,
+    )
+
+
+def _decode_part_payload(response: dict[str, Any]) -> bytes:
+    """Decode an IMAP fetch_part service response into raw bytes."""
+    raw = response["part_data"]
+    encoding = str(response.get("content_transfer_encoding", "base64")).lower()
+    if encoding == "base64":
+        return base64.b64decode(raw)
+    if isinstance(raw, bytes):
+        return raw
+    return str(raw).encode("latin-1")
 
 
 def _normalise_schedule_days(value: Any) -> list[str]:
@@ -311,6 +343,11 @@ class PrintJobResult:
     orientation: str | None = None
     media: str | None = None
     raster_dpi: int | None = None
+    source_format: str | None = None
+    converted_format: str | None = None
+    attachments: list[str] = field(default_factory=list)
+    skipped_attachments: list[str] = field(default_factory=list)
+    merged_attachment_count: int | None = None
     sides: str | None = None
     document_format: str | None = None
     status_code: str | None = None
@@ -339,6 +376,7 @@ class FilterPreviewResult:
     total_found: int                # total messages inspected
     matching: int                   # messages matching the sender filter
     with_pdf: int                   # matching messages that have a PDF attachment
+    with_printable: int | None = None  # matching messages with printable attachments
     emails: list[EmailPreview] = field(default_factory=list)
 
 
@@ -394,7 +432,7 @@ class PendingJob:
 
     entry_id: str
     uid: str
-    part_key: str
+    part_key: str | None
     filename: str
     sender: str | None = None
     duplex_override: str | None = None
@@ -403,8 +441,10 @@ class PendingJob:
     orientation: str | None = None
     media: str | None = None
     raster_dpi: int | None = None
+    mail_text: str = ""
     mail_subject: str = ""
     mail_params: MailPrintParameters = field(default_factory=MailPrintParameters)
+    message_level: bool = False
     queued_at: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
@@ -415,12 +455,14 @@ class PendingJob:
             "sender": self.sender,
             "queued_at": self.queued_at,
             "uid": self.uid,
+            "part_key": self.part_key,
             "duplex": self.duplex_override,
             "booklet": self.booklet_override,
             "copies": self.copies,
             "orientation": self.orientation,
             "media": self.media,
             "raster_dpi": self.raster_dpi,
+            "message_level": self.message_level,
         }
 
 
@@ -753,69 +795,26 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             str(event.data.get("text", "")),
         )
 
-        had_pdf = False
-        actually_printed = False  # tracks whether any part was immediately printed
-        results: list[PrintJobResult] = []
-        for part_key, part_info in parts.items():
-            if not _is_pdf_part(part_info):
-                continue
+        printable_parts = {
+            part_key: part_info
+            for part_key, part_info in parts.items()
+            if _is_printable_part(str(part_key), part_info)
+        }
+        if not printable_parts:
+            if parts:
+                await self.async_request_refresh()
+            return
 
-            had_pdf = True
-            filename: str = _decode_mime_filename(
-                part_info.get("filename")
-                or part_info.get("file_name")
-                or f"document_{part_key}.pdf"
-            )
-            if mail_params.attachment_filter:
-                if mail_params.attachment_filter.lower() not in filename.lower():
-                    continue
-
-            # Schedule check — queue the job if outside the allowed window.
-            if not self._is_within_schedule():
-                pending = PendingJob(
-                    entry_id=entry_id,
-                    uid=uid,
-                    part_key=part_key,
-                    filename=filename,
-                    sender=sender,
-                    duplex_override=mail_params.duplex,
-                    booklet_override=mail_params.booklet,
-                    copies=mail_params.copies,
-                    orientation=mail_params.orientation,
-                    media=mail_params.media,
-                    raster_dpi=mail_params.raster_dpi,
-                    mail_subject=subject,
-                    mail_params=mail_params,
-                )
-                self._pending_jobs.append(pending)
-                logger.info(
-                    "Job '%s' queued — outside print schedule (%s–%s)",
-                    filename, self._schedule_start, self._schedule_end,
-                )
-                try:
-                    await self.hass.services.async_call(
-                        "persistent_notification", "create",
-                        {
-                            "title": "Print Bridge — Job queued",
-                            "message": (
-                                f"**{filename}** from {sender or 'unknown'} was received "
-                                f"outside the print schedule ({self._schedule_start}–"
-                                f"{self._schedule_end}) and will be printed when the "
-                                f"window opens."
-                            ),
-                            "notification_id": f"print_bridge_queued_{entry_id}_{uid}",
-                        },
-                    )
-                except Exception:
-                    pass
-                continue  # don't print now
-
-            actually_printed = True
-            result = await self._async_fetch_and_print(
+        if not self._is_within_schedule():
+            queued_filename = sanitize_ipp_job_name(subject or f"email_{uid}_attachments")
+            if len(printable_parts) == 1:
+                part_key, part_info = next(iter(printable_parts.items()))
+                queued_filename = _attachment_filename(str(part_key), part_info)
+            pending = PendingJob(
                 entry_id=entry_id,
                 uid=uid,
-                part_key=part_key,
-                filename=filename,
+                part_key=None,
+                filename=queued_filename,
                 sender=sender,
                 duplex_override=mail_params.duplex,
                 booklet_override=mail_params.booklet,
@@ -823,26 +822,57 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 orientation=mail_params.orientation,
                 media=mail_params.media,
                 raster_dpi=mail_params.raster_dpi,
+                mail_subject=subject,
+                mail_text=str(event.data.get("text", "")),
+                mail_params=mail_params,
+                message_level=True,
             )
-            results.append(result)
-            self._record_job(result)
-            await self._async_notify_job(result)
-
-        # Only post-process the email after it has been printed immediately.
-        # If all parts were queued by the schedule, post-processing is deferred
-        # to async_flush_pending (to avoid deleting the email before printing).
-        if actually_printed:
-            await self._async_post_process_email(entry_id, uid)
-            await self._async_send_status_reply(
-                imap_entry_id=entry_id,
-                sender=sender,
-                subject=subject,
-                results=results,
-                params=mail_params,
+            self._pending_jobs.append(pending)
+            logger.info(
+                "Email uid=%s queued with %d printable attachment(s) — outside print schedule (%s–%s)",
+                uid,
+                len(printable_parts),
+                self._schedule_start,
+                self._schedule_end,
             )
-
-        if parts:
+            try:
+                await self.hass.services.async_call(
+                    "persistent_notification", "create",
+                    {
+                        "title": "Print Bridge — Job queued",
+                        "message": (
+                            f"Email **{subject or uid}** from {sender or 'unknown'} "
+                            f"has {len(printable_parts)} printable attachment(s), "
+                            f"arrived outside the print schedule ({self._schedule_start}–"
+                            f"{self._schedule_end}), and will be printed when the window opens."
+                        ),
+                        "notification_id": f"print_bridge_queued_{entry_id}_{uid}",
+                    },
+                )
+            except Exception:
+                pass
             await self.async_request_refresh()
+            return
+
+        result = await self.async_process_imap_message(
+            entry_id=entry_id,
+            uid=uid,
+            parts=parts,
+            sender=sender,
+            attachment_filter=mail_params.attachment_filter,
+            duplex_override=mail_params.duplex,
+            booklet_override=mail_params.booklet,
+            copies=mail_params.copies,
+            orientation=mail_params.orientation,
+            media=mail_params.media,
+            raster_dpi=mail_params.raster_dpi,
+            mail_subject=subject,
+            mail_text=str(event.data.get("text", "")),
+        )
+
+        # Only post-process the email after at least one attachment was printed.
+        if result.success and (result.merged_attachment_count or 0) > 0:
+            await self._async_post_process_email(entry_id, uid)
 
     async def _async_fetch_and_print(
         self,
@@ -857,6 +887,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
+        content_type: str | None = None,
     ) -> PrintJobResult:
         """Fetch one attachment via imap.fetch_part and print it.
 
@@ -883,20 +914,37 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             )
 
         try:
-            raw: str = response["part_data"]
-            encoding: str = response.get("content_transfer_encoding", "base64").lower()
-            if encoding == "base64":
-                pdf_bytes = base64.b64decode(raw)
-            else:
-                pdf_bytes = (
-                    raw.encode("latin-1") if isinstance(raw, str) else bytes(raw)
-                )
+            raw_bytes = _decode_part_payload(response)
+            effective_content_type = content_type or response.get("content_type")
         except Exception as exc:
             logger.error("Decoding attachment '%s' failed: %s", filename, exc)
             return PrintJobResult(
                 filename=filename, success=False, error=str(exc),
                 sender=sender,
                 raster_dpi=raster_dpi,
+                imap_entry_id=entry_id, imap_uid=uid, imap_part_key=part_key,
+            )
+
+        try:
+            converted = await self.hass.async_add_executor_job(
+                convert_document_to_pdf,
+                raw_bytes,
+                filename,
+                effective_content_type,
+            )
+        except (UnsupportedDocumentError, DocumentConversionError) as exc:
+            error = _describe_exception(exc)
+            logger.error("Converting attachment '%s' failed: %s", filename, error)
+            return PrintJobResult(
+                filename=filename, success=False, error=error,
+                sender=sender,
+                raster_dpi=raster_dpi,
+                source_format=(
+                    printable_type(filename, effective_content_type).source_format
+                    if printable_type(filename, effective_content_type)
+                    else None
+                ),
+                skipped_attachments=[f"{filename}: {error}"],
                 imap_entry_id=entry_id, imap_uid=uid, imap_part_key=part_key,
             )
 
@@ -908,7 +956,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         )
         result = await self.async_send_print_job(
             filename,
-            pdf_bytes,
+            converted.pdf_data,
             effective_duplex,
             effective_booklet,
             copies=copies,
@@ -921,6 +969,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         result.imap_entry_id = entry_id
         result.imap_uid = uid
         result.imap_part_key = part_key
+        result.source_format = converted.source_format
+        result.converted_format = converted.converted_format
+        result.attachments = [filename]
+        result.merged_attachment_count = 1
         return result
 
     # ------------------------------------------------------------------
@@ -949,6 +1001,19 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             "Retrying job '%s' uid=%s entry=%s",
             job.filename, job.imap_uid, job.imap_entry_id,
         )
+        if job.imap_part_key == "message":
+            return await self.async_process_imap_message(
+                entry_id=job.imap_entry_id,  # type: ignore[arg-type]
+                uid=job.imap_uid,  # type: ignore[arg-type]
+                duplex_override=duplex_override or job.duplex,
+                booklet_override=booklet_override if booklet_override is not None else job.booklet,
+                sender=job.sender,
+                copies=job.copies,
+                orientation=job.orientation,
+                media=job.media,
+                raster_dpi=job.raster_dpi,
+            )
+
         result = await self._async_fetch_and_print(
             entry_id=job.imap_entry_id,       # type: ignore[arg-type]
             uid=job.imap_uid,                  # type: ignore[arg-type]
@@ -1249,7 +1314,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     f"Result: {'success' if result.success else 'failed'}",
                     f"Status code: {result.status_code or 'n/a'}",
                     f"Status: {result.status or result.error or 'accepted'}",
+                    f"Source format: {result.source_format or 'unknown'}",
+                    f"Converted format: {result.converted_format or 'n/a'}",
                     f"Document format: {result.document_format or 'application/pdf'}",
+                    f"Merged attachments: {result.merged_attachment_count if result.merged_attachment_count is not None else 1}",
                     f"Duplex: {result.duplex or 'default'}",
                     f"IPP sides: {result.sides or 'default'}",
                     f"Booklet: {'yes' if result.booklet else 'no'}",
@@ -1261,6 +1329,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     "",
                 ]
             )
+            if result.attachments:
+                lines.append("Printed attachments:")
+                lines.extend(f"- {name}" for name in result.attachments)
+            if result.skipped_attachments:
+                lines.append("Skipped attachments:")
+                lines.extend(f"- {name}" for name in result.skipped_attachments)
+            if result.attachments or result.skipped_attachments:
+                lines.append("")
         return "\n".join(lines).strip()
 
     async def async_process_imap_part(
@@ -1368,6 +1444,205 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         await self.async_request_refresh()
         return result
 
+    async def async_process_imap_message(
+        self,
+        entry_id: str,
+        uid: str,
+        parts: dict[str, dict[str, Any]] | None = None,
+        duplex_override: str | None = None,
+        booklet_override: bool | None = None,
+        sender: str | None = None,
+        attachment_filter: str | None = None,
+        copies: int | None = None,
+        orientation: str | None = None,
+        media: str | None = None,
+        raster_dpi: int | None = None,
+        mail_subject: str | None = None,
+        mail_text: str | None = None,
+    ) -> PrintJobResult:
+        """Fetch, convert, merge, and print all printable attachments from an email."""
+        if parts is not None and not isinstance(parts, dict):
+            parts = None
+        if parts is None or not sender or mail_subject is None or mail_text is None:
+            try:
+                fetched: dict[str, Any] = await self.hass.services.async_call(
+                    "imap",
+                    "fetch",
+                    {"entry": entry_id, "uid": uid},
+                    blocking=True,
+                    return_response=True,
+                )
+            except Exception as exc:
+                result = PrintJobResult(
+                    filename=f"email_{uid}_attachments.pdf",
+                    success=False,
+                    error=f"Failed to fetch email uid={uid}: {exc}",
+                    sender=sender,
+                    imap_entry_id=entry_id,
+                    imap_uid=uid,
+                    imap_part_key="message",
+                )
+                self._record_job(result)
+                await self.async_request_refresh()
+                return result
+
+            parts = parts if parts is not None else fetched.get("parts", {})
+            sender = sender or _normalise_email_address(str(fetched.get("sender", "")))
+            mail_subject = mail_subject if mail_subject is not None else str(fetched.get("subject", ""))
+            mail_text = mail_text if mail_text is not None else str(fetched.get("text", ""))
+
+        mail_params = parse_mail_print_parameters(mail_subject or "", mail_text or "")
+        effective_duplex = mail_params.duplex or duplex_override or self._duplex_mode
+        effective_attachment_filter = mail_params.attachment_filter or attachment_filter
+        effective_copies = mail_params.copies or copies
+        effective_orientation = mail_params.orientation or orientation
+        effective_media = mail_params.media or media
+        effective_raster_dpi = mail_params.raster_dpi or raster_dpi
+
+        summary = await self._async_convert_message_attachments(
+            entry_id,
+            uid,
+            parts or {},
+            effective_attachment_filter,
+        )
+        job_filename = self._message_job_filename(mail_subject or "", uid, summary)
+
+        if not summary.converted:
+            error = "No printable attachments were converted"
+            result = PrintJobResult(
+                filename=job_filename,
+                success=False,
+                error=error,
+                sender=sender,
+                duplex=effective_duplex,
+                booklet=bool(effective_booklet := (
+                    mail_params.booklet
+                    if mail_params.booklet is not None
+                    else booklet_override
+                )),
+                copies=effective_copies or 1,
+                orientation=effective_orientation,
+                media=effective_media,
+                raster_dpi=effective_raster_dpi,
+                attachments=[],
+                skipped_attachments=list(summary.skipped),
+                merged_attachment_count=0,
+                status=error,
+                imap_entry_id=entry_id,
+                imap_uid=uid,
+                imap_part_key="message",
+            )
+            self._record_job(result)
+            await self._async_send_status_reply(
+                imap_entry_id=entry_id,
+                sender=sender,
+                subject=mail_subject or "",
+                results=[result],
+                params=mail_params,
+            )
+            await self.async_request_refresh()
+            return result
+
+        merged_pdf = await self.hass.async_add_executor_job(
+            merge_pdf_documents,
+            summary.converted,
+        )
+        effective_booklet = (
+            mail_params.booklet
+            if mail_params.booklet is not None
+            else (
+                booklet_override
+                if booklet_override is not None
+                else any(is_booklet_job(item.filename, self._booklet_patterns) for item in summary.converted)
+            )
+        )
+        result = await self.async_send_print_job(
+            job_filename,
+            merged_pdf,
+            effective_duplex,
+            bool(effective_booklet),
+            copies=effective_copies,
+            orientation=effective_orientation,
+            media=effective_media,
+            raster_dpi=effective_raster_dpi,
+        )
+        result.sender = sender
+        result.imap_entry_id = entry_id
+        result.imap_uid = uid
+        result.imap_part_key = "message"
+        result.source_format = "mixed" if len(summary.converted) > 1 else summary.converted[0].source_format
+        result.converted_format = "application/pdf"
+        result.attachments = summary.filenames
+        result.skipped_attachments = list(summary.skipped)
+        result.merged_attachment_count = len(summary.converted)
+        self._record_job(result)
+        await self._async_notify_job(result)
+        await self._async_send_status_reply(
+            imap_entry_id=entry_id,
+            sender=sender,
+            subject=mail_subject or "",
+            results=[result],
+            params=mail_params,
+        )
+        await self.async_request_refresh()
+        return result
+
+    async def _async_convert_message_attachments(
+        self,
+        entry_id: str,
+        uid: str,
+        parts: dict[str, dict[str, Any]],
+        attachment_filter: str | None,
+    ) -> AttachmentConversionSummary:
+        """Fetch and convert all printable attachment parts for one message."""
+        summary = AttachmentConversionSummary()
+        for part_key, part_info in sorted(parts.items()):
+            key = str(part_key)
+            filename = _attachment_filename(key, part_info)
+            content_type = str(part_info.get("content_type", ""))
+            resolved = printable_type(filename, content_type)
+            if resolved is None:
+                continue
+            if attachment_filter and attachment_filter.strip().lower() not in filename.lower():
+                summary.skipped.append(f"{filename}: does not match filter '{attachment_filter}'")
+                continue
+            if not resolved.supported:
+                summary.skipped.append(f"{filename}: {resolved.reason or 'unsupported file type'}")
+                continue
+            try:
+                response: dict[str, Any] = await self.hass.services.async_call(
+                    "imap",
+                    "fetch_part",
+                    {"entry": entry_id, "uid": uid, "part": key},
+                    blocking=True,
+                    return_response=True,
+                )
+                raw_bytes = _decode_part_payload(response)
+                converted = await self.hass.async_add_executor_job(
+                    convert_document_to_pdf,
+                    raw_bytes,
+                    filename,
+                    content_type or response.get("content_type"),
+                )
+            except Exception as exc:
+                summary.skipped.append(f"{filename}: {_describe_exception(exc)}")
+                continue
+            summary.converted.append(converted)
+        return summary
+
+    def _message_job_filename(
+        self,
+        subject: str,
+        uid: str,
+        summary: AttachmentConversionSummary,
+    ) -> str:
+        """Return a display filename for a combined message job."""
+        if len(summary.converted) == 1:
+            return summary.converted[0].filename
+        base = sanitize_ipp_job_name(subject or f"email_{uid}_attachments")
+        stem, _ext = os.path.splitext(base)
+        return f"{stem or 'email_attachments'}.pdf"
+
     async def async_print_file(
         self,
         file_path: str,
@@ -1378,7 +1653,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         media: str | None = None,
         raster_dpi: int | None = None,
     ) -> PrintJobResult:
-        """Print a PDF file from disk and return the result."""
+        """Print a supported file from disk and return the result."""
         filename = os.path.basename(file_path)
         effective_duplex = duplex_mode or self._duplex_mode
         booklet = force_booklet or is_booklet_job(filename, self._booklet_patterns)
@@ -1390,15 +1665,39 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             except OSError:
                 return None
 
-        pdf_data = await self.hass.async_add_executor_job(_read_file)
-        if pdf_data is None:
+        raw_data = await self.hass.async_add_executor_job(_read_file)
+        if raw_data is None:
             result = PrintJobResult(filename=filename, success=False, error=f"Cannot read {file_path}")
             self._record_job(result)
             return result
 
+        try:
+            converted = await self.hass.async_add_executor_job(
+                convert_document_to_pdf,
+                raw_data,
+                filename,
+                None,
+            )
+        except (UnsupportedDocumentError, DocumentConversionError) as exc:
+            error = _describe_exception(exc)
+            result = PrintJobResult(
+                filename=filename,
+                success=False,
+                error=error,
+                source_format=(
+                    printable_type(filename, None).source_format
+                    if printable_type(filename, None)
+                    else None
+                ),
+                skipped_attachments=[f"{filename}: {error}"],
+            )
+            self._record_job(result)
+            await self.async_request_refresh()
+            return result
+
         result = await self.async_send_print_job(
             filename,
-            pdf_data,
+            converted.pdf_data,
             effective_duplex,
             booklet,
             copies=copies,
@@ -1406,6 +1705,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             media=media,
             raster_dpi=raster_dpi,
         )
+        result.source_format = converted.source_format
+        result.converted_format = converted.converted_format
+        result.attachments = [filename]
+        result.merged_attachment_count = 1
         self._record_job(result)
         await self.async_request_refresh()
         return result
@@ -1422,7 +1725,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         media: str | None = None,
         raster_dpi: int | None = None,
     ) -> dict:
-        """Print all PDF attachments from one IMAP email by UID."""
+        """Print all printable attachments from one IMAP email by UID."""
         from homeassistant.exceptions import HomeAssistantError
 
         if not imap_entry_id:
@@ -1450,50 +1753,45 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         body_text = str(fetch_result.get("text", ""))
         sender = _normalise_email_address(str(fetch_result.get("sender", "")))
         parts: dict = fetch_result.get("parts", {})
-        pdf_parts = {
+        printable_parts = {
             k: v for k, v in parts.items()
-            if _is_pdf_part(v)
+            if _is_printable_part(str(k), v)
         }
 
-        if not pdf_parts:
+        if not printable_parts:
             raise HomeAssistantError(
-                f"No PDF attachments found in email uid={uid}. "
+                f"No printable attachments found in email uid={uid}. "
                 f"Available parts: {list(parts.keys())}"
             )
 
-        results = []
-        for part_key, part_info in pdf_parts.items():
-            filename = (
-                part_info.get("filename")
-                or part_info.get("file_name")
-                or f"attachment_{part_key}.pdf"
-            )
-            result = await self.async_process_imap_part(
-                entry_id=imap_entry_id,
-                uid=uid,
-                part_key=part_key,
-                filename=filename,
-                duplex_override=duplex,
-                booklet_override=booklet or None,
-                sender=sender,
-                attachment_filter=attachment_filter,
-                copies=copies,
-                orientation=orientation,
-                media=media,
-                raster_dpi=raster_dpi,
-                mail_subject=subject,
-                mail_text=body_text,
-            )
-            results.append({
-                "filename": result.filename,
-                "success": result.success,
-                "error": result.error,
-            })
+        result = await self.async_process_imap_message(
+            entry_id=imap_entry_id,
+            uid=uid,
+            parts=parts,
+            duplex_override=duplex,
+            booklet_override=booklet or None,
+            sender=sender,
+            attachment_filter=attachment_filter,
+            copies=copies,
+            orientation=orientation,
+            media=media,
+            raster_dpi=raster_dpi,
+            mail_subject=subject,
+            mail_text=body_text,
+        )
 
         return {
             "uid": uid,
-            "printed": len(results),
-            "results": results,
+            "printed": result.merged_attachment_count or 0,
+            "results": [
+                {
+                    "filename": result.filename,
+                    "success": result.success,
+                    "error": result.error,
+                    "attachments": list(result.attachments),
+                    "skipped_attachments": list(result.skipped_attachments),
+                }
+            ],
         }
 
     async def async_check_filter(
@@ -1556,6 +1854,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
         matching = [e for e in emails if e.matches_filter]
         with_pdf = [e for e in matching if e.has_pdf]
+        with_printable = [
+            e for e in matching
+            if (
+                getattr(e, "has_printable", None)
+                or (getattr(e, "has_printable", None) is None and e.has_pdf)
+            )
+        ]
 
         result = FilterPreviewResult(
             checked_at=datetime.now().isoformat(timespec="seconds"),
@@ -1564,6 +1869,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             total_found=len(emails),
             matching=len(matching),
             with_pdf=len(with_pdf),
+            with_printable=len(with_printable),
             emails=emails,
         )
         self._filter_preview = result
@@ -1576,30 +1882,38 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         try:
             from homeassistant.components.persistent_notification import async_create as _pn_create
 
-            pdf_emails = [e for e in result.emails if e.has_pdf and e.matches_filter]
+            printable_emails = [
+                e for e in result.emails
+                if (
+                    getattr(e, "has_printable", None)
+                    or (getattr(e, "has_printable", None) is None and e.has_pdf)
+                )
+                and e.matches_filter
+            ]
 
-            if not pdf_emails:
+            if not printable_emails:
                 body = (
                     f"**Account:** {result.imap_account}  \n"
                     f"**Checked:** {result.checked_at}  \n\n"
                     f"Found **{result.total_found}** email(s), "
                     f"**{result.matching}** match the sender filter, "
-                    f"**{result.with_pdf}** have a PDF attachment.\n\n"
+                    f"**{result.with_printable or result.with_pdf}** have printable attachments.\n\n"
                     "_No printable emails found. Check your sender/folder filter settings._"
                 )
             else:
                 rows = "\n".join(
-                    f"| `{e.uid}` | {e.subject[:35]} | {e.sender[:25]} | {e.pdf_count} |"
-                    for e in pdf_emails[:20]
+                    f"| `{e.uid}` | {e.subject[:35]} | {e.sender[:25]} | "
+                    f"{getattr(e, 'printable_count', None) or e.pdf_count} |"
+                    for e in printable_emails[:20]
                 )
-                more = f"\n_… and {len(pdf_emails) - 20} more_" if len(pdf_emails) > 20 else ""
+                more = f"\n_… and {len(printable_emails) - 20} more_" if len(printable_emails) > 20 else ""
                 body = (
                     f"**Account:** {result.imap_account}  \n"
                     f"**Checked:** {result.checked_at}  \n\n"
                     f"Found **{result.total_found}** email(s) · "
                     f"**{result.matching}** match filter · "
-                    f"**{result.with_pdf}** have PDF\n\n"
-                    "| UID | Subject | From | PDFs |\n"
+                    f"**{result.with_printable or result.with_pdf}** have printable attachments\n\n"
+                    "| UID | Subject | From | Printable |\n"
                     "|-----|---------|------|:----:|\n"
                     f"{rows}{more}\n\n"
                     "_To print one, call service `print_bridge.print_email` with the UID above._"
@@ -1762,12 +2076,18 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         )
         effective_orientation = _orientation_for_job(booklet, orientation)
         orientation_requested = (
-            _ORIENTATION_ENUMS[effective_orientation]
-            if effective_orientation is not None
-            else None
+            None
+            if booklet
+            else (
+                _ORIENTATION_ENUMS[effective_orientation]
+                if effective_orientation is not None
+                else None
+            )
         )
         effective_copies = copies or 1
         effective_media = media
+        if booklet:
+            duplex_mode = "two-sided-short-edge"
         if booklet:
             try:
                 pdf_data = await self.hass.async_add_executor_job(
@@ -1814,9 +2134,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             document_format=document_format,
             copies=copies,
             orientation_requested=(
-                None
-                if booklet and document_format == "image/pwg-raster"
-                else orientation_requested
+                None if booklet else orientation_requested
             ),
             media=effective_media,
             print_scaling="fit" if booklet else None,
@@ -2012,30 +2330,47 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         logger.info("Flushing %d pending job(s) from schedule queue", len(jobs))
 
         for job in jobs:
-            result = await self._async_fetch_and_print(
-                entry_id=job.entry_id,
-                uid=job.uid,
-                part_key=job.part_key,
-                filename=job.filename,
-                duplex_override=job.duplex_override,
-                booklet_override=job.booklet_override,
-                sender=job.sender,
-                copies=job.copies,
-                orientation=job.orientation,
-                media=job.media,
-                raster_dpi=job.raster_dpi,
-            )
-            self._record_job(result)
-            await self._async_notify_job(result)
+            if job.message_level or job.part_key is None:
+                result = await self.async_process_imap_message(
+                    entry_id=job.entry_id,
+                    uid=job.uid,
+                    duplex_override=job.duplex_override,
+                    booklet_override=job.booklet_override,
+                    sender=job.sender,
+                    copies=job.copies,
+                    orientation=job.orientation,
+                    media=job.media,
+                    raster_dpi=job.raster_dpi,
+                    mail_subject=job.mail_subject,
+                    mail_text=job.mail_text,
+                )
+            else:
+                result = await self._async_fetch_and_print(
+                    entry_id=job.entry_id,
+                    uid=job.uid,
+                    part_key=job.part_key,
+                    filename=job.filename,
+                    duplex_override=job.duplex_override,
+                    booklet_override=job.booklet_override,
+                    sender=job.sender,
+                    copies=job.copies,
+                    orientation=job.orientation,
+                    media=job.media,
+                    raster_dpi=job.raster_dpi,
+                )
+                self._record_job(result)
+                await self._async_notify_job(result)
             # Apply configured IMAP action now that the job has been printed.
-            await self._async_post_process_email(job.entry_id, job.uid)
-            await self._async_send_status_reply(
-                imap_entry_id=job.entry_id,
-                sender=job.sender,
-                subject=job.mail_subject,
-                results=[result],
-                params=job.mail_params,
-            )
+            if result.success and (result.merged_attachment_count or 0) > 0:
+                await self._async_post_process_email(job.entry_id, job.uid)
+            if not (job.message_level or job.part_key is None):
+                await self._async_send_status_reply(
+                    imap_entry_id=job.entry_id,
+                    sender=job.sender,
+                    subject=job.mail_subject,
+                    results=[result],
+                    params=job.mail_params,
+                )
 
         await self.async_request_refresh()
         return len(jobs)
@@ -2120,6 +2455,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "document_format": result.document_format,
                 "status_code": result.status_code,
                 "status": result.status,
+                "source_format": result.source_format,
+                "converted_format": result.converted_format,
+                "attachments": list(result.attachments),
+                "skipped_attachments": list(result.skipped_attachments),
+                "merged_attachment_count": result.merged_attachment_count,
                 "timestamp": result.timestamp,
             },
         )

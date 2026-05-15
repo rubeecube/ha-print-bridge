@@ -8,8 +8,8 @@ build-backend = "setuptools.backends.legacy:build"
 
 [project]
 name = "print-bridge"
-version = "0.1.22"
-description = "Print Bridge: Home Assistant custom component to automatically print PDF email attachments via IMAP events, with direct IPP/AirPrint and CUPS support, booklet printing, schedule, audit log, and retry."
+version = "0.1.23"
+description = "Print Bridge: Home Assistant custom component to automatically print common email attachments via IMAP events, with direct IPP/AirPrint and CUPS support, conversion, booklet printing, schedule, audit log, and retry."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -35,8 +35,17 @@ classifiers = [
 
 # Runtime dependency (installed by HA from manifest.json requirements[])
 dependencies = [
+    "beautifulsoup4>=4.12.0",
+    "markdown>=3.5",
+    "odfpy>=1.4.1",
+    "openpyxl>=3.1.0",
     "pypdf>=4.0.0",
     "pypdfium2>=4.30.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=1.0.0",
+    "reportlab>=4.0.0",
+    "striprtf>=0.0.26",
+    "xlrd>=2.0.0",
 ]
 
 [project.urls]
@@ -53,10 +62,19 @@ Changelog     = "https://github.com/rubeecube/ha-print-bridge/releases"
 dev = [
     "pytest>=8.0",
     "pytest-homeassistant-custom-component>=0.13",
+    "beautifulsoup4>=4.12.0",
+    "markdown>=3.5",
+    "odfpy>=1.4.1",
+    "openpyxl>=3.1.0",
     "pypdf>=4.0.0",
     "pypdfium2>=4.30.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=1.0.0",
     "pyyaml>=6.0",
+    "reportlab>=4.0.0",
     "requests>=2.31",
+    "striprtf>=0.0.26",
+    "xlrd>=2.0.0",
 ]
 
 # ---------------------------------------------------------------------------

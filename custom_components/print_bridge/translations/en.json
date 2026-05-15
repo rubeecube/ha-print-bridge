@@ -69,7 +69,7 @@
           "schedule_template": "Print schedule template"
         },
         "data_description": {
-          "auto_print_enabled": "When ON: Print Bridge automatically prints PDF attachments from emails matching your sender/folder filters. When OFF (default after install): nothing prints automatically — configure your filters first, then enable, or use the Automation Blueprint for per-sender / per-keyword rules.",
+          "auto_print_enabled": "When ON: Print Bridge automatically prints supported attachments from emails matching your sender/folder filters. When OFF (default after install): nothing prints automatically — configure your filters first, then enable, or use the Automation Blueprint for per-sender / per-keyword rules.",
           "allowed_senders": "Only emails from these addresses trigger a print job. Leave empty to accept all senders.",
           "folder_filter": "Only process emails arriving in these IMAP folders. Leave empty to accept all folders. Use the exact folder name shown in parentheses above (e.g. INBOX, INBOX/Print).",
           "imap_account": "Select an account to append its email address to Allowed Senders automatically.",

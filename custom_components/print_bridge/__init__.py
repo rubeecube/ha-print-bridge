@@ -1,8 +1,9 @@
 """Print Bridge integration setup.
 
 Architecture: this component subscribes to imap_content events fired by HA's
-built-in IMAP integration.  When a PDF attachment is detected it calls
-imap.fetch_part to retrieve the bytes and sends them to CUPS via IPP.
+built-in IMAP integration.  When printable attachments are detected it calls
+imap.fetch_part to retrieve the bytes, converts non-PDF files to PDF, and sends
+the job to CUPS or a direct IPP printer.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from .const import (
     SERVICE_CLEAR_QUEUE,
     SERVICE_PRINT_EMAIL,
     SERVICE_PRINT_FILE,
+    SERVICE_PROCESS_IMAP_MESSAGE,
     SERVICE_PROCESS_IMAP_PART,
     SERVICE_RETRY_JOB,
 )
@@ -63,6 +65,26 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
         vol.Required("uid"): cv.string,
         vol.Required("part_key"): cv.string,
         vol.Optional("filename"): cv.string,
+        vol.Optional("duplex"): vol.In(DUPLEX_MODES),
+        vol.Optional("booklet", default=False): cv.boolean,
+        vol.Optional("attachment_filter"): cv.string,
+        vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
+        vol.Optional("orientation"): vol.In(("portrait", "landscape")),
+        vol.Optional("media"): cv.string,
+        vol.Optional("raster_dpi"): vol.All(
+            vol.Coerce(int), vol.Range(min=72, max=600)
+        ),
+        vol.Optional("sender"): cv.string,
+        vol.Optional("mail_subject"): cv.string,
+        vol.Optional("mail_text"): cv.string,
+    }
+)
+
+_PROCESS_IMAP_MESSAGE_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): cv.string,
+        vol.Required("uid"): cv.string,
+        vol.Optional("parts"): vol.Any(dict, cv.string),
         vol.Optional("duplex"): vol.In(DUPLEX_MODES),
         vol.Optional("booklet", default=False): cv.boolean,
         vol.Optional("attachment_filter"): cv.string,
@@ -229,7 +251,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -
         if not remaining:
             for svc in (
                 SERVICE_PRINT_FILE, SERVICE_CLEAR_QUEUE,
-                SERVICE_PROCESS_IMAP_PART, SERVICE_CHECK_FILTER,
+                SERVICE_PROCESS_IMAP_PART, SERVICE_PROCESS_IMAP_MESSAGE,
+                SERVICE_CHECK_FILTER,
                 SERVICE_CHECK_PRINTER_CAPABILITIES,
                 SERVICE_RETRY_JOB, SERVICE_PRINT_EMAIL,
             ):
@@ -300,6 +323,38 @@ def _register_services(hass: HomeAssistant) -> None:
                 f"Print job failed for '{result.filename}': {result.error}"
             )
 
+    async def _handle_process_imap_message(call: ServiceCall) -> dict:
+        """Service called by blueprints/automations to print one email as one job."""
+        coordinator = _get_any_coordinator(hass).selected_printer_coordinator
+        result = await coordinator.async_process_imap_message(
+            entry_id=call.data["entry_id"],
+            uid=call.data["uid"],
+            parts=call.data.get("parts"),
+            duplex_override=call.data.get("duplex"),
+            booklet_override=call.data.get("booklet", False) or None,
+            attachment_filter=call.data.get("attachment_filter"),
+            copies=call.data.get("copies"),
+            orientation=call.data.get("orientation"),
+            media=call.data.get("media"),
+            raster_dpi=call.data.get("raster_dpi"),
+            sender=call.data.get("sender"),
+            mail_subject=call.data.get("mail_subject"),
+            mail_text=call.data.get("mail_text"),
+        )
+        if not result.success:
+            raise HomeAssistantError(
+                f"Print job failed for '{result.filename}': {result.error}"
+            )
+        return {
+            "filename": result.filename,
+            "success": result.success,
+            "status_code": result.status_code,
+            "status": result.status,
+            "attachments": list(result.attachments),
+            "skipped_attachments": list(result.skipped_attachments),
+            "merged_attachment_count": result.merged_attachment_count,
+        }
+
     hass.services.async_register(
         DOMAIN, SERVICE_PRINT_FILE, _handle_print_file, schema=_PRINT_FILE_SCHEMA
     )
@@ -309,6 +364,13 @@ def _register_services(hass: HomeAssistant) -> None:
         SERVICE_PROCESS_IMAP_PART,
         _handle_process_imap_part,
         schema=_PROCESS_IMAP_PART_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PROCESS_IMAP_MESSAGE,
+        _handle_process_imap_message,
+        schema=_PROCESS_IMAP_MESSAGE_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
     async def _handle_check_filter(call: ServiceCall) -> dict:
@@ -323,6 +385,7 @@ def _register_services(hass: HomeAssistant) -> None:
             "total_found": result.total_found,
             "matching_filter": result.matching,
             "with_pdf": result.with_pdf,
+            "with_printable": result.with_printable,
             "emails": [e.as_dict() for e in result.emails],
         }
 
@@ -409,7 +472,7 @@ def _register_services(hass: HomeAssistant) -> None:
     )
 
     async def _handle_print_email(call: ServiceCall) -> dict:
-        """Print all PDF attachments of a specific email from the IMAP server.
+        """Print all supported attachments of a specific email from the IMAP server.
 
         This lets users trigger a print job for any email in their mailbox —
         ideal for on-demand printing from the Lovelace dashboard or automations.

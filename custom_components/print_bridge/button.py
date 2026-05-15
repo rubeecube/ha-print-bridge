@@ -232,11 +232,15 @@ class PrintPreviewEmailButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEnt
         data = self.coordinator.data
         if not data or not data.filter_preview:
             return None
-        printable = [
-            email.as_dict()
-            for email in data.filter_preview.emails
-            if email.has_pdf and email.matches_filter
-        ]
+        printable = []
+        for email in data.filter_preview.emails:
+            has_printable = (
+                email.has_printable
+                if email.has_printable is not None
+                else email.has_pdf
+            )
+            if has_printable and email.matches_filter:
+                printable.append(email.as_dict())
         if self._slot >= len(printable):
             return None
         return printable[self._slot]
@@ -269,10 +273,11 @@ class PrintPreviewEmailButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEnt
             "date": email.get("date"),
             "folder": email.get("folder"),
             "pdf_count": email.get("pdf_count"),
+            "printable_count": email.get("printable_count"),
         }
 
     async def async_press(self) -> None:
-        """Print all PDF attachments from the email in this slot."""
+        """Print all supported attachments from the email in this slot."""
         email = self._email
         data = self.coordinator.data
         preview = data.filter_preview if data else None
