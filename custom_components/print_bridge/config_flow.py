@@ -811,8 +811,8 @@ def _build_placeholders(
         imap_info = f"Found {len(imap_entries)} IMAP account(s): {names}"
     else:
         imap_info = (
-            "No IMAP accounts configured. "
-            "Add the HA IMAP integration first."
+            "No IMAP accounts configured. Email-triggered printing is disabled, "
+            "but queue-folder printing and the print_file service still work."
         )
 
     return {

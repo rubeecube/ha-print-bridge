@@ -7,19 +7,20 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-173%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.24-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-177%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.25-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
 
 Print common email attachments directly to a network printer — fully inside Home Assistant.
 
-Print Bridge turns an email inbox into a controlled print intake. It listens to
-Home Assistant's built-in IMAP events, fetches printable attachments, converts
-supported document types to an internal PDF, merges all matching attachments in
-one email into one job, applies duplex/booklet rules, and submits the result to
-CUPS or directly to an IPP/AirPrint printer.
+Print Bridge turns an email inbox or local folder into a controlled print
+intake. It listens to Home Assistant's built-in IMAP events or scans a configured
+queue folder, fetches printable documents, converts supported types to an
+internal PDF, merges all matching attachments in one email into one job, applies
+duplex/booklet rules, and submits the result to CUPS or directly to an
+IPP/AirPrint printer.
 
 It was built because Home Assistant has the pieces but not the end-to-end
 printing workflow:
@@ -60,6 +61,7 @@ Home Assistant automations stay simple.
 | Use case | Why Print Bridge helps |
 |---|---|
 | **Email-to-printer mailbox** | Forward documents to a dedicated mailbox such as `print@example.com`; matching attachments print automatically. |
+| **Folder-to-printer drop box** | Put files in the configured queue folder and Print Bridge prints them even when no IMAP integration exists. |
 | **Family or office shared printing** | Allow trusted senders only, while keeping printer access inside Home Assistant. |
 | **Weekly newsletters and parasha sheets** | Match sender, subject, folder, or filename; print regular PDFs automatically without opening a laptop. |
 | **Booklets and folded handouts** | Detect filename patterns or mail parameters, reorder pages for saddle-stitch booklet printing, force short-edge duplex, and request landscape fitting. |
@@ -93,7 +95,8 @@ them.
 
 | | |
 |---|---|
-| **Event-driven** | Triggered instantly by HA's IMAP push (IDLE) — no polling |
+| **Email event-driven** | Triggered instantly by HA's IMAP push (IDLE) — no mailbox polling |
+| **Queue folder intake** | Automatically prints supported files dropped in the configured queue folder; IMAP is optional |
 | **Smart setup** | Auto-discovers CUPS printers; pre-fills sender from existing IMAP accounts |
 | **Sender filter** | Accept only specific email addresses, or leave empty to accept all |
 | **Folder filter** | Accept only emails arriving in specific IMAP folders (e.g. `INBOX/Print`) |
@@ -122,7 +125,7 @@ them.
 
 | Integration | Required? | Role |
 |---|:---:|---|
-| **HA IMAP** (built-in) | **Yes** | Fires `imap_content` events when email arrives. Print Bridge listens to these. |
+| **HA IMAP** (built-in) | Optional | Required only for email automation. Without IMAP, Print Bridge can still print files from the queue folder or via `print_file`. |
 | **HA IPP** (built-in) | **No** | Monitors printer status (ink, paper, errors). Print Bridge does **not** use it — Print Bridge *is* its own IPP client and sends `Print-Job` packets directly. |
 | **CUPS add-on** | Optional | Needed for USB printers or non-AirPrint printers that require driver conversion. AirPrint printers can be reached directly via IPP. |
 
@@ -138,14 +141,14 @@ for the next queued job.
 
 ---
 
-### 1. HA IMAP Integration (built-in) — **required**
+### 1. HA IMAP Integration (built-in) — optional for email printing
 
 > Settings → Devices & Services → Add Integration → **IMAP**
 
 Configure it with your mail server details.
-Print Bridge listens to the `imap_content` events it fires — **no credentials are stored in Print Bridge**.
+Print Bridge listens to the `imap_content` events it fires — **no credentials are stored in Print Bridge**. Skip this step if you only want to print files dropped into the queue folder.
 
-### 2. Printer — choose one
+### 2. Printer — required; choose one
 
 #### Option A — Direct IPP (no extra software needed)
 
@@ -198,9 +201,9 @@ Copy `custom_components/print_bridge/` into your HA config directory and restart
 
 ## Configuration
 
-### Step 1 — HA IMAP Integration
+### Step 1 — Optional HA IMAP Integration
 
-Configure the built-in IMAP integration first (see [Prerequisites](#1-ha-imap-integration-built-in)).
+Configure the built-in IMAP integration first only if you want email-triggered printing (see [Prerequisites](#1-ha-imap-integration-built-in--optional-for-email-printing)).
 
 ### Step 2 — Add Print Bridge
 
@@ -248,8 +251,8 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 | **IMAP Folder Filter** | *(empty = all)* | One folder name per line. Empty accepts mail from any folder. Use the exact name shown in the hint above (e.g. `INBOX`, `INBOX/Print`). |
 | **Default Duplex Mode** | Two-sided portrait | Fallback for all jobs. |
 | **Booklet Patterns** | *(empty)* | Filename substrings that trigger booklet page reordering. |
-| **Delete after printing** | On | Remove the PDF from the queue folder after a successful print. |
-| **Print Queue Folder** | `/media/print_queue` | Used by the `print_file` service and queue-depth sensor. |
+| **Delete after printing** | On | Remove successfully printed queue-folder files. If off, printed files are remembered and not reprinted unless modified. |
+| **Print Queue Folder** | `/media/print_queue` | Drop supported files here for folder-to-printer intake. Also used by the queue-depth sensor and `clear_queue`. |
 | **Raster DPI** | `150` | Used only when direct IPP printing must convert PDFs to PWG Raster/JPEG. Lower values are faster and create smaller jobs. |
 | **Email Action after Printing** | Do nothing | What to do with the email after the PDF prints: **Do nothing** / **Mark as read** / **Move to archive folder** / **Delete from server**. |
 | **Archive Folder** | `INBOX/Printed` | Target folder when "Move to archive folder" is selected. Created automatically by most IMAP servers. |
@@ -289,7 +292,7 @@ The simple template includes component configuration controls, mailbox/printer s
 
 Use the dashboard **Auto Print** switch:
 
-- **On** — simple setup; Print Bridge prints supported attachments from allowed senders automatically.
+- **On** — simple setup; Print Bridge prints supported attachments from allowed senders and supported files from the queue folder automatically.
 - **Off** — use the automation blueprint for per-sender / per-keyword rules.
 
 ### 4. Enable debug logging (troubleshooting)
@@ -348,6 +351,17 @@ Supported: `.pdf`, `.docx`, `.docm`, `.odt`, `.rtf`, `.txt`, `.html`, `.htm`,
 Explicitly unsupported: legacy binary `.doc` and `.ppt` files. These need an
 external office engine such as LibreOffice, which Print Bridge does not bundle.
 
+### Queue folder intake
+
+When **Auto Print** is enabled, Print Bridge also scans the configured **Print
+Queue Folder**. Any stable supported file found there is printed through the
+same conversion, booklet, direct IPP/CUPS, busy-printer retry, audit, and
+notification pipeline as email attachments.
+
+Temporary or hidden files are ignored. Successfully printed files are deleted
+when **Delete after printing** is enabled. If deletion is disabled, each file is
+printed once per modification time and will not repeat until it changes.
+
 ### `print_bridge.print_file`
 
 Print a supported file from the HA filesystem. Non-PDF files are converted to an
@@ -365,7 +379,7 @@ internal PDF first.
 
 ### `print_bridge.clear_queue`
 
-Delete all `.pdf` files from the configured queue folder.
+Delete all supported printable files from the configured queue folder.
 
 ### `print_bridge.process_imap_part`
 
@@ -631,8 +645,8 @@ HA_TOKEN=<token> ./validate.sh
 
 ## FAQ
 
-**Q: Do I need to configure IMAP credentials in Print Bridge?**  
-A: No. Credentials live in HA's IMAP integration only. Print Bridge subscribes to the events it fires.
+**Q: Do I need IMAP?**
+A: No. IMAP is only needed for email-triggered printing. Without IMAP, enable **Auto Print** and put supported files in the configured **Print Queue Folder**, or call `print_bridge.print_file`.
 
 **Q: Can I print from multiple email addresses?**  
 A: Yes — add one address per line in **Allowed Senders**, or leave it empty to accept all.
@@ -685,7 +699,7 @@ A: `http://<cups-host>:631`. When using the CUPS add-on on HA OS with host netwo
 Pull requests are welcome. Please open an issue first for significant changes.
 
 ```bash
-./venv/bin/pytest tests/ -v   # 173 tests, no external dependencies required
+./venv/bin/pytest tests/ -v   # 177 tests, no external dependencies required
 ```
 
 ---

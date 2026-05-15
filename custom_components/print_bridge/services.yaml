@@ -166,7 +166,7 @@ print_file:
 clear_queue:
   name: Clear Print Queue
   description: >-
-    Delete all PDF files currently sitting in the selected target printer's
+    Delete all supported files currently sitting in the selected target printer's
     configured print queue folder.
 
 retry_job:
