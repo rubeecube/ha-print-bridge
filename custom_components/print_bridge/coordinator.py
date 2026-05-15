@@ -110,6 +110,9 @@ logger = logging.getLogger(__name__)
 _STATUS_INTERVAL = timedelta(minutes=5)
 _CAPABILITIES_TTL = timedelta(hours=1)
 _PRINT_JOB_TIMEOUT_SECONDS = 300
+_PRINTER_BUSY_POLL_INTERVAL_SECONDS = 15
+_PRINTER_BUSY_QUEUE_MAX_ATTEMPTS = 120
+_PRINTER_BUSY_STATUS_CODES = {0x0506, 0x0507}
 _SCHEDULE_DAY_ALIASES = {
     "mon": "mon",
     "monday": "mon",
@@ -286,6 +289,28 @@ def _first_or_none(values: list[str]) -> str | None:
     return values[0] if values else None
 
 
+def _first_bool(values: list[str]) -> bool | None:
+    value = _first_or_none(values)
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes"}:
+        return True
+    if normalized in {"false", "0", "no"}:
+        return False
+    return None
+
+
+def _first_int(values: list[str]) -> int | None:
+    value = _first_or_none(values)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def _orientation_for_job(booklet: bool, orientation: str | None) -> str | None:
     """Return the effective job orientation keyword."""
     if booklet:
@@ -394,6 +419,10 @@ class PrinterCapabilities:
     pwg_raster_resolutions: list[str] = field(default_factory=list)
     pwg_sheet_back: str | None = None
     sides_supported: list[str] = field(default_factory=list)
+    printer_is_accepting_jobs: bool | None = None
+    printer_state: str | None = None
+    printer_state_reasons: list[str] = field(default_factory=list)
+    queued_job_count: int | None = None
     selected_document_format: str | None = None
     conversion_required: bool = False
     error: str | None = None
@@ -418,6 +447,10 @@ class PrinterCapabilities:
             "pwg_raster_resolutions": list(self.pwg_raster_resolutions),
             "pwg_sheet_back": self.pwg_sheet_back,
             "sides_supported": list(self.sides_supported),
+            "printer_is_accepting_jobs": self.printer_is_accepting_jobs,
+            "printer_state": self.printer_state,
+            "printer_state_reasons": list(self.printer_state_reasons),
+            "queued_job_count": self.queued_job_count,
             "selected_document_format": self.selected_document_format,
             "conversion_required": self.conversion_required,
             "pdf_supported": self.pdf_supported,
@@ -467,6 +500,38 @@ class PendingJob:
 
 
 @dataclass
+class BusyPrintJob:
+    """A print payload waiting for the printer to stop reporting busy."""
+
+    filename: str
+    pdf_data: bytes
+    duplex_mode: str
+    booklet: bool
+    copies: int | None = None
+    orientation: str | None = None
+    media: str | None = None
+    raster_dpi: int | None = None
+    attempts: int = 0
+    queued_at: str = field(
+        default_factory=lambda: datetime.now().isoformat(timespec="seconds")
+    )
+
+    def as_dict(self) -> dict:
+        return {
+            "filename": self.filename,
+            "queued_at": self.queued_at,
+            "queue_type": "printer_busy",
+            "duplex": self.duplex_mode,
+            "booklet": self.booklet,
+            "copies": self.copies,
+            "orientation": self.orientation,
+            "media": self.media,
+            "raster_dpi": self.raster_dpi,
+            "attempts": self.attempts,
+        }
+
+
+@dataclass
 class AutoPrintData:
     """Snapshot of integration state exposed to entities."""
 
@@ -478,6 +543,7 @@ class AutoPrintData:
     filter_preview: FilterPreviewResult | None = None
     printer_capabilities: PrinterCapabilities | None = None
     pending_jobs: list[PendingJob] = field(default_factory=list)
+    printer_busy_jobs: list[BusyPrintJob] = field(default_factory=list)
 
 
 class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
@@ -497,6 +563,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self._printer_capabilities: PrinterCapabilities | None = None
         self._capabilities_checked_at: datetime | None = None
         self._pending_jobs: list[PendingJob] = []
+        self._printer_busy_jobs: list[BusyPrintJob] = []
+        self._printer_busy_queue_task: asyncio.Task | None = None
         self._last_schedule_state: bool | None = None  # track open↔closed transitions
         # Deduplication: maps "uid:part_key" → datetime of last print to prevent
         # multiple blueprints firing on the same attachment from double-printing.
@@ -1090,7 +1158,15 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         if not result.success and not self._notify_on_failure:
             return
 
-        if result.success:
+        if result.status_code == "queued-busy":
+            title = "Print Bridge — Queued for retry"
+            message = (
+                f"**{result.filename}**\n"
+                "Printer is busy; Print Bridge will poll it and resend the job."
+            )
+            if result.sender:
+                message += f"\nFrom: {result.sender}"
+        elif result.success:
             title = f"Print Bridge — Printed successfully"
             message = f"**{result.filename}**"
             if result.sender:
@@ -1308,10 +1384,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         lines.append("")
 
         for index, result in enumerate(results, start=1):
+            result_status = (
+                "queued" if result.status_code == "queued-busy"
+                else "success" if result.success else "failed"
+            )
             lines.extend(
                 [
                     f"Job {index}: {result.filename}",
-                    f"Result: {'success' if result.success else 'failed'}",
+                    f"Result: {result_status}",
                     f"Status code: {result.status_code or 'n/a'}",
                     f"Status: {result.status or result.error or 'accepted'}",
                     f"Source format: {result.source_format or 'unknown'}",
@@ -1954,6 +2034,16 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         await self.async_request_refresh()
         return deleted
 
+    async def async_cancel_busy_print_jobs(self) -> int:
+        """Discard jobs waiting for a busy printer to become ready."""
+        count = len(self._printer_busy_jobs)
+        self._printer_busy_jobs.clear()
+        if not count:
+            return 0
+        await self.async_cancel_printer_busy_queue_task()
+        await self.async_request_refresh()
+        return count
+
     async def async_cancel_queued_jobs(self) -> int:
         """Discard jobs that Print Bridge has not submitted to the printer yet.
 
@@ -1962,13 +2052,15 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         """
         pending_count = len(self._pending_jobs)
         self._pending_jobs.clear()
+        busy_count = await self.async_cancel_busy_print_jobs()
         deleted_files = await self._async_delete_queue_pdfs()
-        total = pending_count + deleted_files
+        total = pending_count + busy_count + deleted_files
         if total:
             logger.info(
-                "Cancelled %d queued job(s): %d schedule-held, %d file-queue PDF(s)",
+                "Cancelled %d queued job(s): %d schedule-held, %d printer-busy, %d file-queue PDF(s)",
                 total,
                 pending_count,
+                busy_count,
                 deleted_files,
             )
         await self.async_request_refresh()
@@ -2037,6 +2129,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     attrs.get("pwg-raster-document-sheet-back", [])
                 ),
                 sides_supported=attrs.get("sides-supported", []),
+                printer_is_accepting_jobs=_first_bool(
+                    attrs.get("printer-is-accepting-jobs", [])
+                ),
+                printer_state=_first_or_none(attrs.get("printer-state", [])),
+                printer_state_reasons=attrs.get("printer-state-reasons", []),
+                queued_job_count=_first_int(attrs.get("queued-job-count", [])),
                 selected_document_format=selected_format,
                 conversion_required=conversion_required,
             )
@@ -2054,6 +2152,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     filter_preview=self.data.filter_preview,
                     printer_capabilities=capabilities,
                     pending_jobs=list(self.data.pending_jobs),
+                    printer_busy_jobs=list(self._printer_busy_jobs),
                 )
             )
         return capabilities
@@ -2068,6 +2167,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
+        _queue_on_busy: bool = True,
     ) -> PrintJobResult:
         """Build an IPP packet and POST it to CUPS."""
         filename = sanitize_ipp_job_name(filename)
@@ -2086,6 +2186,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         )
         effective_copies = copies or 1
         effective_media = media
+        source_pdf_data = pdf_data
         if booklet:
             duplex_mode = "two-sided-short-edge"
         if booklet:
@@ -2197,6 +2298,39 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     )
 
                 error = ipp_status
+                if status_code in _PRINTER_BUSY_STATUS_CODES and _queue_on_busy:
+                    busy_job = BusyPrintJob(
+                        filename=filename,
+                        pdf_data=source_pdf_data,
+                        duplex_mode=duplex_mode,
+                        booklet=booklet,
+                        copies=copies,
+                        orientation=orientation,
+                        media=media,
+                        raster_dpi=raster_dpi,
+                    )
+                    self._queue_printer_busy_job(busy_job)
+                    queued_status = (
+                        "printer busy; queued for retry when printer is ready"
+                    )
+                    logger.warning(
+                        "Printer reported busy for '%s'; queued for retry",
+                        filename,
+                    )
+                    return PrintJobResult(
+                        filename=filename,
+                        success=True,
+                        duplex=duplex_mode,
+                        booklet=booklet,
+                        copies=effective_copies,
+                        orientation=effective_orientation,
+                        media=effective_media,
+                        raster_dpi=reported_raster_dpi,
+                        sides=sides,
+                        document_format=document_format,
+                        status_code="queued-busy",
+                        status=queued_status,
+                    )
                 logger.error("IPP rejected job for '%s': %s", filename, error)
                 return PrintJobResult(
                     filename=filename, success=False, error=error,
@@ -2258,6 +2392,113 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 sides=sides, document_format=document_format,
                 status_code="network-error", status=error,
             )
+
+    def _queue_printer_busy_job(self, job: BusyPrintJob) -> None:
+        """Queue a job rejected because the printer reported server-error-busy."""
+        self._printer_busy_jobs.append(job)
+        self._start_printer_busy_queue()
+        if self.data is not None:
+            self.async_set_updated_data(
+                AutoPrintData(
+                    queue_depth=self.data.queue_depth,
+                    printer_online=self.data.printer_online,
+                    last_job=self.data.last_job,
+                    job_history=list(self.data.job_history),
+                    total_jobs_sent=self.data.total_jobs_sent,
+                    filter_preview=self.data.filter_preview,
+                    printer_capabilities=self.data.printer_capabilities,
+                    pending_jobs=list(self.data.pending_jobs),
+                    printer_busy_jobs=list(self._printer_busy_jobs),
+                )
+            )
+
+    def _start_printer_busy_queue(self) -> None:
+        """Start the background busy-printer retry loop if needed."""
+        if (
+            self._printer_busy_queue_task is not None
+            and not self._printer_busy_queue_task.done()
+        ):
+            return
+        self._printer_busy_queue_task = self.hass.async_create_task(
+            self._async_printer_busy_queue_loop()
+        )
+
+    async def async_cancel_printer_busy_queue_task(self) -> None:
+        """Cancel the background busy-printer queue task during unload."""
+        if (
+            self._printer_busy_queue_task is None
+            or self._printer_busy_queue_task.done()
+        ):
+            return
+        self._printer_busy_queue_task.cancel()
+        try:
+            await self._printer_busy_queue_task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._printer_busy_queue_task = None
+
+    async def _async_printer_busy_queue_loop(self) -> None:
+        """Poll printer readiness and resend jobs rejected as server-error-busy."""
+        try:
+            while self._printer_busy_jobs:
+                await self._async_wait_until_printer_ready_for_retry()
+                if not self._printer_busy_jobs:
+                    break
+
+                job = self._printer_busy_jobs.pop(0)
+                job.attempts += 1
+                result = await self.async_send_print_job(
+                    job.filename,
+                    job.pdf_data,
+                    job.duplex_mode,
+                    job.booklet,
+                    copies=job.copies,
+                    orientation=job.orientation,
+                    media=job.media,
+                    raster_dpi=job.raster_dpi,
+                    _queue_on_busy=False,
+                )
+                if result.status_code in {"IPP 0x0506", "IPP 0x0507"}:
+                    if job.attempts >= _PRINTER_BUSY_QUEUE_MAX_ATTEMPTS:
+                        result.error = (
+                            result.error or "printer busy retry limit reached"
+                        )
+                        self._record_job(result)
+                        await self._async_notify_job(result)
+                    else:
+                        self._printer_busy_jobs.insert(0, job)
+                        await self.async_request_refresh()
+                        await asyncio.sleep(_PRINTER_BUSY_POLL_INTERVAL_SECONDS)
+                    continue
+
+                self._record_job(result)
+                await self._async_notify_job(result)
+                await self.async_request_refresh()
+        finally:
+            if self._printer_busy_queue_task is asyncio.current_task():
+                self._printer_busy_queue_task = None
+
+    async def _async_wait_until_printer_ready_for_retry(self) -> None:
+        """Poll Get-Printer-Attributes until the printer looks ready."""
+        while self._printer_busy_jobs:
+            if await self._async_printer_ready_for_retry():
+                return
+            await self.async_request_refresh()
+            await asyncio.sleep(_PRINTER_BUSY_POLL_INTERVAL_SECONDS)
+
+    async def _async_printer_ready_for_retry(self) -> bool:
+        """Return True when a busy-queued job should be retried."""
+        capabilities = await self.async_check_printer_capabilities(force=True)
+        if capabilities.error:
+            return await self._async_check_printer_online()
+        if capabilities.printer_is_accepting_jobs is False:
+            return False
+        if capabilities.printer_state in {"processing", "stopped"}:
+            return False
+        if capabilities.queued_job_count is not None and capabilities.queued_job_count > 0:
+            return False
+        return True
 
     def _select_document_format(self, document_formats: list[str]) -> tuple[str, bool]:
         """Choose the document format Print Bridge should send."""
@@ -2390,6 +2631,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             logger.info("Print window opened — flushing %d pending job(s)", len(self._pending_jobs))
             await self.async_flush_pending()
 
+        if self._printer_busy_jobs:
+            self._start_printer_busy_queue()
+
         self._last_schedule_state = currently_open
 
         last_job = self._job_history[0] if self._job_history else None
@@ -2402,6 +2646,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             filter_preview=self._filter_preview,
             printer_capabilities=self._printer_capabilities,
             pending_jobs=list(self._pending_jobs),
+            printer_busy_jobs=list(self._printer_busy_jobs),
         )
 
     # ------------------------------------------------------------------

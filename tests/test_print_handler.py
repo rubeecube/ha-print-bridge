@@ -164,6 +164,18 @@ def test_parse_rejected_ipp_response():
     assert ok_description == description
 
 
+def test_parse_busy_ipp_response():
+    body = struct.pack(">HHI", 0x0200, 0x0507, 1) + b"\x03"
+
+    status, description = parse_ipp_response_status(body)
+    ok, ok_description = ipp_response_succeeded(body)
+
+    assert status == 0x0507
+    assert "server-error-busy" in description
+    assert ok is False
+    assert ok_description == description
+
+
 def test_parse_html_response_is_not_ipp_success():
     ok, description = ipp_response_succeeded(b"<!DOCTYPE HTML><html></html>")
 
@@ -217,6 +229,25 @@ def test_parse_ipp_attributes_repeated_values_and_resolution():
     ]
     assert attrs["pwg-raster-document-type-supported"] == ["srgb_8"]
     assert attrs["pwg-raster-document-resolution-supported"] == ["600dpi"]
+
+
+def test_parse_ipp_attributes_printer_readiness_values():
+    body = (
+        struct.pack(">HHI", 0x0200, 0x0000, 1)
+        + b"\x04"
+        + _ipp_attr(0x22, "printer-is-accepting-jobs", b"\x01")
+        + _ipp_attr(0x23, "printer-state", struct.pack(">i", 4))
+        + _ipp_attr(0x44, "printer-state-reasons", b"none")
+        + _ipp_attr(0x21, "queued-job-count", struct.pack(">i", 2))
+        + b"\x03"
+    )
+
+    attrs = parse_ipp_attributes(body)
+
+    assert attrs["printer-is-accepting-jobs"] == ["true"]
+    assert attrs["printer-state"] == ["processing"]
+    assert attrs["printer-state-reasons"] == ["none"]
+    assert attrs["queued-job-count"] == ["2"]
 
 
 # ── determine_sides ───────────────────────────────────────────────────────────

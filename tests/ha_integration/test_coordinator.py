@@ -32,6 +32,7 @@ from custom_components.print_bridge.const import CONF_DIRECT_PRINTER_URL, DOMAIN
 from custom_components.print_bridge.coordinator import (
     AutoPrintCoordinator,
     AutoPrintData,
+    BusyPrintJob,
     PendingJob,
     PrintJobResult,
     _decode_mime_filename,
@@ -962,6 +963,92 @@ async def test_send_print_job_rejects_ipp_error_body(hass: HomeAssistant) -> Non
 
     assert result.success is False
     assert "document-format-not-supported" in result.error
+
+
+async def test_send_print_job_queues_when_printer_is_busy(
+    hass: HomeAssistant,
+) -> None:
+    """IPP 0x0507 means the printer is busy; queue instead of failing."""
+    _, coordinator = await _setup_coordinator(hass)
+
+    busy_resp = MagicMock()
+    busy_resp.status = 200
+    busy_resp.__aenter__ = AsyncMock(return_value=busy_resp)
+    busy_resp.__aexit__ = AsyncMock(return_value=False)
+    busy_resp.read = AsyncMock(return_value=_ipp_response(0x0507))
+
+    mock_session = MagicMock()
+    mock_session.post.return_value = busy_resp
+
+    with (
+        patch(
+            "custom_components.print_bridge.coordinator.async_get_clientsession",
+            return_value=mock_session,
+        ),
+        patch.object(coordinator, "_start_printer_busy_queue") as mock_start,
+    ):
+        result = await coordinator.async_send_print_job(
+            "doc.pdf", _FAKE_PDF, "one-sided", False
+        )
+
+    assert result.success is True
+    assert result.status_code == "queued-busy"
+    assert result.status == "printer busy; queued for retry when printer is ready"
+    assert mock_session.post.call_count == 1
+    assert len(coordinator._printer_busy_jobs) == 1
+    assert coordinator._printer_busy_jobs[0].filename == "doc.pdf"
+    assert coordinator._printer_busy_jobs[0].pdf_data == _FAKE_PDF
+    mock_start.assert_called_once()
+
+
+async def test_printer_busy_queue_waits_until_ready_then_resends(
+    hass: HomeAssistant,
+) -> None:
+    """Busy-queued jobs are retried only after readiness polling succeeds."""
+    _, coordinator = await _setup_coordinator(hass)
+    coordinator._printer_busy_jobs.append(
+        BusyPrintJob(
+            filename="queued.pdf",
+            pdf_data=_FAKE_PDF,
+            duplex_mode="one-sided",
+            booklet=False,
+        )
+    )
+    send_result = PrintJobResult(filename="queued.pdf", success=True)
+
+    with (
+        patch.object(
+            coordinator,
+            "_async_printer_ready_for_retry",
+            new=AsyncMock(side_effect=[False, True]),
+        ),
+        patch.object(
+            coordinator,
+            "async_send_print_job",
+            new=AsyncMock(return_value=send_result),
+        ) as mock_send,
+        patch.object(coordinator, "_record_job") as mock_record,
+        patch.object(coordinator, "_async_notify_job", new=AsyncMock()) as mock_notify,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+        patch("custom_components.print_bridge.coordinator.asyncio.sleep", new=AsyncMock()) as mock_sleep,
+    ):
+        await coordinator._async_printer_busy_queue_loop()
+
+    mock_sleep.assert_awaited_once_with(15)
+    mock_send.assert_awaited_once_with(
+        "queued.pdf",
+        _FAKE_PDF,
+        "one-sided",
+        False,
+        copies=None,
+        orientation=None,
+        media=None,
+        raster_dpi=None,
+        _queue_on_busy=False,
+    )
+    mock_record.assert_called_once_with(send_result)
+    mock_notify.assert_awaited_once_with(send_result)
+    assert coordinator._printer_busy_jobs == []
 
 
 async def test_send_print_job_reports_timeout_context_and_sanitizes_filename(

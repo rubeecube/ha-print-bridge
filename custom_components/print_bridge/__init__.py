@@ -238,6 +238,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) ->
 
 async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -> bool:
     """Unload a config entry."""
+    if entry.runtime_data is not None:
+        await entry.runtime_data.async_cancel_printer_busy_queue_task()
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     # Remove services only when no entries remain loaded.

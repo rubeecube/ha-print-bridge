@@ -204,7 +204,12 @@ class CancelQueuedJobsButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEnti
     def available(self) -> bool:
         """Only available when Print Bridge has queued work to discard."""
         data = self.coordinator.data
-        return bool(data and (data.pending_jobs or data.queue_depth > 0))
+        return bool(
+            data
+            and (
+                data.pending_jobs or data.printer_busy_jobs or data.queue_depth > 0
+            )
+        )
 
     async def async_press(self) -> None:
         """Discard jobs that have not yet been submitted to the printer."""

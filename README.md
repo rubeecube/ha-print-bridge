@@ -7,13 +7,37 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-167%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.23-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-173%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.24-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
 
 Print common email attachments directly to a network printer — fully inside Home Assistant.
+
+Print Bridge turns an email inbox into a controlled print intake. It listens to
+Home Assistant's built-in IMAP events, fetches printable attachments, converts
+supported document types to an internal PDF, merges all matching attachments in
+one email into one job, applies duplex/booklet rules, and submits the result to
+CUPS or directly to an IPP/AirPrint printer.
+
+It was built because Home Assistant has the pieces but not the end-to-end
+printing workflow:
+
+- The built-in **IMAP** integration can announce new mail, but it does not
+  convert attachments, manage print policy, or submit jobs to a printer.
+- The built-in **IPP** integration monitors printers; it does not send
+  `Print-Job` requests.
+- Generic automations become fragile for real mail printing: attachment payloads
+  can be large, filenames can be MIME-encoded, printers may reject PDF and need
+  raster conversion, booklet jobs need page imposition, and busy printers need
+  retry logic.
+
+Print Bridge is the missing glue: one local integration that owns the print
+pipeline, exposes HA entities and services, keeps audit history, and lets normal
+Home Assistant automations stay simple.
+
+---
 
 ### Supported platforms
 
@@ -29,11 +53,39 @@ Print common email attachments directly to a network printer — fully inside Ho
 > Docker bridge networking blocks multicast, so auto-discovery will not find LAN printers.
 > You can still configure a printer manually by typing its IPP URL.
 
-**Print Bridge** bridges HA's built-in IMAP integration with a CUPS print server.
-When an email with printable attachments arrives from a matching sender (and folder),
-the component fetches the bytes via `imap.fetch_part`, converts non-PDF files to
-an internal PDF, optionally reorders pages for booklet printing, and sends an
-IPP/2.0 `Print-Job` directly to CUPS or the printer.
+---
+
+## Use Cases
+
+| Use case | Why Print Bridge helps |
+|---|---|
+| **Email-to-printer mailbox** | Forward documents to a dedicated mailbox such as `print@example.com`; matching attachments print automatically. |
+| **Family or office shared printing** | Allow trusted senders only, while keeping printer access inside Home Assistant. |
+| **Weekly newsletters and parasha sheets** | Match sender, subject, folder, or filename; print regular PDFs automatically without opening a laptop. |
+| **Booklets and folded handouts** | Detect filename patterns or mail parameters, reorder pages for saddle-stitch booklet printing, force short-edge duplex, and request landscape fitting. |
+| **Invoices, bank letters, receipts** | Print selected senders one-sided or duplex, then mark mail as read, move it to an archive folder, or leave it untouched. |
+| **Multiple attachments in one email** | Convert and merge matching attachments into one job so the printer receives fewer submissions and prints faster. |
+| **Direct AirPrint printer without CUPS** | Send IPP directly to modern printers; when PDF is not supported, convert internally to PWG Raster or JPEG. |
+| **Legacy or USB printer via CUPS** | Let CUPS handle drivers while Print Bridge handles mail rules, queueing, conversion, audit, and Home Assistant controls. |
+| **Quiet-hours printing** | Hold jobs outside allowed days/hours or a custom HA template gate, then flush them when the window opens. |
+| **Unreliable/busy printers** | Queue jobs when the printer reports `server-error-busy`, poll readiness, and resend when it is available. |
+| **Status feedback to sender** | Reply with success/failure, IPP status code, and the effective settings used for the job. |
+
+---
+
+## Why a Dedicated Integration?
+
+This is intentionally not just an automation blueprint. A blueprint can route an
+event, but it cannot safely own the whole print lifecycle. Print Bridge needs to
+decode MIME filenames, fetch large attachments on demand, convert common file
+types, merge PDFs, impose booklets, query printer capabilities, translate to a
+printer-supported document format, poll and retry busy printers, record audit
+events, expose queue state, and optionally reply to the original sender.
+
+Keeping that logic in a custom integration gives Home Assistant a clear boundary:
+IMAP still owns mail credentials, CUPS or the printer still owns physical
+printing, and Print Bridge owns the policy and transformation layer between
+them.
 
 ---
 
@@ -56,7 +108,8 @@ IPP/2.0 `Print-Job` directly to CUPS or the printer.
 | **Mailbox/printer selectors** | Dashboard selects choose which IMAP account to scan and which printer receives manual jobs |
 | **Dashboard configuration** | Switch/select/text entities let Lovelace manage filters, duplex, cleanup, notifications, and schedule settings |
 | **Scheduled printing** | Hold jobs outside allowed days, hours, or a custom HA template gate |
-| **Queued job view/cancel** | Dashboard shows up to five scheduled jobs and can discard queued work before submission |
+| **Printer-busy retry queue** | If IPP returns `server-error-busy`, poll readiness and resend automatically |
+| **Queued job view/cancel** | Dashboard shows up to five scheduled or printer-busy jobs and can discard queued work before submission |
 | **Blueprint** | Advanced per-sender/per-keyword rules with folder, duplex, and booklet logic |
 | **Lovelace dashboard** | Paste-ready printer view plus detailed audit view |
 | **Services** | `print_file`, `clear_queue`, `process_imap_message`, `process_imap_part`, `check_filter`, `print_email` |
@@ -75,9 +128,13 @@ IPP/2.0 `Print-Job` directly to CUPS or the printer.
 
 > **Why not the HA IPP integration?**
 > HA's built-in `ipp` integration ([docs](https://www.home-assistant.io/integrations/ipp/)) is a *monitoring* tool — it reads printer state, ink levels, and page counts.
-> Print Bridge bypasses it entirely and speaks raw IPP/2.0 directly to the printer or CUPS server.
+> Print Bridge speaks raw IPP/2.0 directly to the printer or CUPS server and submits `Print-Job` requests.
 > You can install both side-by-side: use the HA IPP integration to monitor ink/status,
 > and Print Bridge to receive and dispatch print jobs.
+
+Print Bridge also uses `Get-Printer-Attributes` itself when needed to discover
+supported document formats and to decide when a busy direct IPP printer is ready
+for the next queued job.
 
 ---
 
@@ -232,7 +289,7 @@ The simple template includes component configuration controls, mailbox/printer s
 
 Use the dashboard **Auto Print** switch:
 
-- **On** — simple setup; Print Bridge prints all PDFs from allowed senders automatically.
+- **On** — simple setup; Print Bridge prints supported attachments from allowed senders automatically.
 - **Off** — use the automation blueprint for per-sender / per-keyword rules.
 
 ### 4. Enable debug logging (troubleshooting)
@@ -257,7 +314,7 @@ Then go to **Settings → System → Logs** to view debug output. This shows eac
 | `sensor.print_bridge_*_last_print_job` | Sensor | `success` / `failed` | `last_filename`, `last_status`, `sender`, `duplex`, `booklet`, `source_format`, `converted_format`, `attachments`, `skipped_attachments`, `timestamp` |
 | `sensor.print_bridge_*_job_log` | Sensor | Total jobs sent | `jobs[]` — last 50 print attempts with full metadata |
 | `sensor.print_bridge_*_filter_preview` | Sensor | Matching emails with printable attachments | `emails[]`, `checked_at`, `imap_account`, `total_found`, `matching_filter`, `with_pdf`, `with_printable` |
-| `sensor.print_bridge_*_scheduled_queue` | Sensor | Queued job count | `jobs[]` shows up to 5 waiting jobs, plus `total_jobs`, `shown_jobs`, schedule settings |
+| `sensor.print_bridge_*_scheduled_queue` | Sensor | Queued job count | `jobs[]` shows up to 5 schedule-held or printer-busy jobs, plus `total_jobs`, `schedule_jobs`, `printer_busy_jobs`, `shown_jobs`, schedule settings |
 | `binary_sensor.print_bridge_*_printer_online` | Binary Sensor | `on` / `off` | — |
 | `select.print_bridge_*_imap_account` | Select | Selected IMAP account | Used by **Check Filter** and on-demand email printing when no account is specified |
 | `select.print_bridge_*_target_printer` | Select | Selected printer | Used by dashboard print actions and default print services |
@@ -267,7 +324,7 @@ Then go to **Settings → System → Logs** to view debug output. This shows eac
 | `text.print_bridge_*_*` | Text | Current value | Sender/folder filters, booklet patterns, queue/archive folders, and schedule fields |
 | `button.print_bridge_*_print_test_page` | Button | — | Sends a built-in one-page PDF to the printer |
 | `button.print_bridge_*_check_filter` | Button | — | Scans the mailbox and updates `filter_preview` sensor |
-| `button.print_bridge_*_cancel_queued_jobs` | Button | — | Cancels schedule-held jobs and clears queued PDFs that have not been submitted |
+| `button.print_bridge_*_cancel_queued_jobs` | Button | — | Cancels schedule-held jobs, printer-busy retry jobs, and queued PDFs that have not been submitted |
 
 *`*` is a slug derived from the printer's CUPS queue name.*
 
@@ -452,14 +509,17 @@ orientation, media, and raster DPI when available.
 ```
 Mail Server ──IMAP IDLE──► HA IMAP Integration ──imap_content event──► Print Bridge
                                                                               │
-                          1. Check: is sender in allowed_senders?             │
-                          2. Check: is folder in folder_filter?               │
-                          3. Check: schedule day/hour/template open?          │
-                          4. For each PDF part → imap.fetch_part ◄────────────┘
-                          5. Mail parameters? → override duplex/booklet/copies/media/dpi
-                          6. Booklet? → reorder pages + request landscape orientation
-                          7. Build IPP/2.0 packet → POST to CUPS/printer
-                          8. Fire print_bridge_job_completed → Logbook/status reply
+                          1. Check sender, folder, subject, and schedule      │
+                          2. Detect supported attachment filenames/types      │
+                          3. Fetch attachment bytes via imap.fetch_part ◄─────┘
+                          4. Convert non-PDF files to internal PDF
+                          5. Merge matching attachments into one job
+                          6. Mail parameters override duplex/booklet/copies/media/dpi
+                          7. Booklet? → impose pages + request landscape/fit
+                          8. Query printer formats when direct IPP needs it
+                          9. Build IPP/2.0 packet → POST to CUPS/printer
+                         10. Busy? queue, poll readiness, resend
+                         11. Fire print_bridge_job_completed → Logbook/status reply
 ```
 
 ---
@@ -538,7 +598,7 @@ Replace `PRINTER_NAME` with the slug for your printer queue name.
 The view includes:
 
 - **Status row** — printer online, queue depth, jobs sent, last job status
-- **Scheduled Queue table** — up to 5 waiting jobs with filename, sender, and queue time
+- **Scheduled Queue table** — up to 5 scheduled or printer-busy jobs with filename, sender/settings, and queue time
 - **Logbook card** — 7-day print event history
 - **Recent jobs table** — last 50 jobs: timestamp / filename / ✅❌ / sender / duplex / booklet
 - **Filter Preview table** — folder / subject / sender / ✅match / PDF count
@@ -587,7 +647,7 @@ A: Press the **Check Filter** button (or call `print_bridge.check_filter`). Resu
 A: Print Bridge calls `imap.fetch_part` which has no size limit (unlike the 32 KB event body limit).
 
 **Q: How do I enable booklet printing?**  
-A: Add a substring of the PDF filename to **Booklet Patterns** in the options (e.g. `Programme`). Any attachment whose filename contains that string is automatically reordered for saddle-stitch printing.
+A: Add a substring of the attachment filename to **Booklet Patterns** in the options (e.g. `Programme`). Any matching attachment or merged email job is automatically reordered for saddle-stitch printing.
 
 **Q: What happens to the email after it's printed?**  
 A: Configure **Email Action after Printing** in Options: **Mark as read** keeps it in your inbox but removes the unread badge; **Move to archive folder** moves it to `INBOX/Printed` (or a folder you choose) and marks it read; **Delete from server** removes it permanently. Default is **Do nothing** (no change to the email).
@@ -605,6 +665,10 @@ A: No. HA's `ipp` integration ([docs](https://www.home-assistant.io/integrations
 | **Required for printing** | No | Yes |
 | **Useful together** | Yes — monitors the same printer | Yes — sends jobs to same printer |
 
+Print Bridge is separate because print submission, attachment conversion,
+booklet imposition, queueing, retries, and sender status replies are outside
+the scope of HA's printer-monitoring integration.
+
 **Q: Do I need CUPS at all?**  
 A: Not for modern AirPrint printers. If your printer has an IPP endpoint (most WiFi printers made after ~2015 do), use **Direct IPP mode** with a URL like `http://printer.local/ipp/print`. CUPS is useful when the printer is USB-attached, needs format conversion (PCL/PostScript), or you want a managed queue.
 
@@ -621,7 +685,7 @@ A: `http://<cups-host>:631`. When using the CUPS add-on on HA OS with host netwo
 Pull requests are welcome. Please open an issue first for significant changes.
 
 ```bash
-./venv/bin/pytest tests/ -v   # 146 tests, no external dependencies required
+./venv/bin/pytest tests/ -v   # 173 tests, no external dependencies required
 ```
 
 ---
