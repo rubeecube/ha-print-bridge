@@ -16,8 +16,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import os
 import socket
 import struct
+import time
 from datetime import datetime, time as dt_time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,7 +30,13 @@ from homeassistant.exceptions import HomeAssistantError
 from pypdf import PdfReader, PdfWriter
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.print_bridge.const import CONF_DIRECT_PRINTER_URL, DOMAIN
+from custom_components.print_bridge.const import (
+    CONF_AUTO_DELETE,
+    CONF_AUTO_PRINT_ENABLED,
+    CONF_DIRECT_PRINTER_URL,
+    CONF_QUEUE_FOLDER,
+    DOMAIN,
+)
 from custom_components.print_bridge.coordinator import (
     AutoPrintCoordinator,
     AutoPrintData,
@@ -152,6 +160,12 @@ def _make_a4_pdf(page_count: int = 4) -> bytes:
     buf = io.BytesIO()
     writer.write(buf)
     return buf.getvalue()
+
+
+def _make_stable_file(path, content: bytes = b"print me") -> None:
+    path.write_bytes(content)
+    stable_time = time.time() - 10
+    os.utime(path, (stable_time, stable_time))
 
 
 def _c_string(data: bytes, offset: int, length: int = 64) -> str:
@@ -561,6 +575,7 @@ async def test_auto_flush_when_window_opens(hass: HomeAssistant) -> None:
     with (
         patch.object(coordinator, "_is_within_schedule", return_value=True),
         patch.object(coordinator, "async_flush_pending", new=AsyncMock(return_value=1)) as mock_flush,
+        patch.object(coordinator, "async_process_queue_folder", new=AsyncMock(return_value=0)),
         patch.object(coordinator, "_async_check_printer_online", return_value=True),
         patch.object(coordinator, "_count_queue_files", return_value=0),
     ):
@@ -581,12 +596,109 @@ async def test_auto_flush_on_startup_with_pending(hass: HomeAssistant) -> None:
     with (
         patch.object(coordinator, "_is_within_schedule", return_value=True),
         patch.object(coordinator, "async_flush_pending", new=AsyncMock(return_value=1)) as mock_flush,
+        patch.object(coordinator, "async_process_queue_folder", new=AsyncMock(return_value=0)),
         patch.object(coordinator, "_async_check_printer_online", return_value=True),
         patch.object(coordinator, "_count_queue_files", return_value=0),
     ):
         await coordinator._async_update_data()
 
     mock_flush.assert_called_once()
+
+
+async def test_count_queue_files_includes_supported_non_pdf(
+    hass: HomeAssistant,
+    tmp_path,
+) -> None:
+    """Queue depth counts all supported drop-folder files, not only PDFs."""
+    opts = {**MOCK_OPTIONS, CONF_QUEUE_FOLDER: str(tmp_path)}
+    _, coordinator = await _setup_coordinator(hass, options=opts)
+
+    _make_stable_file(tmp_path / "document.pdf", _make_a4_pdf(page_count=1))
+    _make_stable_file(tmp_path / "notes.txt")
+    _make_stable_file(tmp_path / ".hidden.pdf", _make_a4_pdf(page_count=1))
+    _make_stable_file(tmp_path / "upload.tmp")
+    _make_stable_file(tmp_path / "legacy.doc")
+
+    assert coordinator._count_queue_files() == 2
+
+
+async def test_process_queue_folder_prints_supported_file_without_imap(
+    hass: HomeAssistant,
+    tmp_path,
+) -> None:
+    """Auto folder intake prints a stable supported file without IMAP."""
+    opts = {
+        **MOCK_OPTIONS,
+        CONF_AUTO_DELETE: True,
+        CONF_QUEUE_FOLDER: str(tmp_path),
+    }
+    _, coordinator = await _setup_coordinator(hass, options=opts)
+    file_path = tmp_path / "letter.txt"
+    _make_stable_file(file_path)
+    result = PrintJobResult(filename="letter.txt", success=True)
+
+    with (
+        patch.object(coordinator, "async_print_file", new=AsyncMock(return_value=result)) as mock_print,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()) as mock_refresh,
+    ):
+        count = await coordinator.async_process_queue_folder()
+
+    assert count == 1
+    mock_print.assert_awaited_once_with(str(file_path), request_refresh=False)
+    mock_refresh.assert_awaited_once()
+    assert not file_path.exists()
+
+
+async def test_process_queue_folder_keeps_file_when_auto_delete_disabled(
+    hass: HomeAssistant,
+    tmp_path,
+) -> None:
+    """When cleanup is disabled, unchanged files are not reprinted every refresh."""
+    opts = {
+        **MOCK_OPTIONS,
+        CONF_AUTO_DELETE: False,
+        CONF_QUEUE_FOLDER: str(tmp_path),
+    }
+    _, coordinator = await _setup_coordinator(hass, options=opts)
+    file_path = tmp_path / "letter.txt"
+    _make_stable_file(file_path)
+    result = PrintJobResult(filename="letter.txt", success=True)
+
+    with (
+        patch.object(coordinator, "async_print_file", new=AsyncMock(return_value=result)) as mock_print,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        first_count = await coordinator.async_process_queue_folder()
+        second_count = await coordinator.async_process_queue_folder()
+
+    assert first_count == 1
+    assert second_count == 0
+    assert file_path.exists()
+    mock_print.assert_awaited_once_with(str(file_path), request_refresh=False)
+
+
+async def test_update_data_processes_queue_folder_when_auto_print_enabled(
+    hass: HomeAssistant,
+    tmp_path,
+) -> None:
+    """The periodic coordinator update drives folder intake when auto-print is on."""
+    opts = {
+        **MOCK_OPTIONS,
+        CONF_AUTO_PRINT_ENABLED: True,
+        CONF_QUEUE_FOLDER: str(tmp_path),
+    }
+    _, coordinator = await _setup_coordinator(hass, options=opts)
+
+    with (
+        patch.object(coordinator, "_is_within_schedule", return_value=True),
+        patch.object(coordinator, "_async_check_printer_online", new=AsyncMock(return_value=True)),
+        patch.object(coordinator, "async_process_queue_folder", new=AsyncMock(return_value=1)) as mock_process,
+        patch.object(coordinator, "_count_queue_files", return_value=0),
+    ):
+        data = await coordinator._async_update_data()
+
+    mock_process.assert_awaited_once_with(request_refresh=False)
+    assert data.queue_depth == 0
 
 
 # ---------------------------------------------------------------------------

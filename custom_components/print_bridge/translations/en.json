@@ -69,12 +69,12 @@
           "schedule_template": "Print schedule template"
         },
         "data_description": {
-          "auto_print_enabled": "When ON: Print Bridge automatically prints supported attachments from emails matching your sender/folder filters. When OFF (default after install): nothing prints automatically — configure your filters first, then enable, or use the Automation Blueprint for per-sender / per-keyword rules.",
+          "auto_print_enabled": "When ON: Print Bridge automatically prints supported attachments from emails matching your sender/folder filters and supported files dropped into the Print Queue Folder. When OFF (default after install): nothing prints automatically — configure your filters first, then enable, or use the Automation Blueprint for per-sender / per-keyword rules.",
           "allowed_senders": "Only emails from these addresses trigger a print job. Leave empty to accept all senders.",
           "folder_filter": "Only process emails arriving in these IMAP folders. Leave empty to accept all folders. Use the exact folder name shown in parentheses above (e.g. INBOX, INBOX/Print).",
           "imap_account": "Select an account to append its email address to Allowed Senders automatically.",
           "booklet_patterns": "If the PDF filename contains any of these substrings it is printed as a booklet (two-sided short-edge, pages reordered).",
-          "queue_folder": "Folder where PDFs are saved when using the print_file service. Must be writable by Home Assistant.",
+          "queue_folder": "Folder watched for supported files when Auto Print is enabled. Also used by print_file and queue cleanup. Must be writable by Home Assistant.",
           "raster_dpi": "DPI used only when direct IPP printing must convert PDFs to PWG Raster or JPEG. Lower values are faster and create smaller jobs; 150 is the fast default.",
           "email_action_after_print": "What to do with the email in your mailbox after the PDF is printed.",
           "email_archive_folder": "IMAP folder to move emails to when 'Move to archive folder' is selected (e.g. INBOX/Printed). Created automatically by most servers.",

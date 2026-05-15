@@ -2,11 +2,12 @@
 
 Responsibilities:
   - Listen for imap_content events fired by HA's built-in IMAP integration.
-  - For each PDF attachment, call imap.fetch_part to retrieve the bytes.
+  - Print supported files dropped into the configured queue folder.
+  - Convert supported non-PDF inputs to internal PDF.
   - Optionally reorder pages for booklet printing.
   - Send the print job to CUPS via a raw IPP/2.0 request (aiohttp).
   - Fire print_bridge_job_completed events → HA Logbook audit trail.
-  - Periodically check printer reachability and count queued files.
+  - Periodically check printer reachability and process queued files.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import logging
 import os
 import re
 import smtplib
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.utils import parseaddr
@@ -113,6 +115,8 @@ _PRINT_JOB_TIMEOUT_SECONDS = 300
 _PRINTER_BUSY_POLL_INTERVAL_SECONDS = 15
 _PRINTER_BUSY_QUEUE_MAX_ATTEMPTS = 120
 _PRINTER_BUSY_STATUS_CODES = {0x0506, 0x0507}
+_QUEUE_FILE_STABLE_SECONDS = 2
+_QUEUE_IGNORED_SUFFIXES = (".tmp", ".part", ".crdownload")
 _SCHEDULE_DAY_ALIASES = {
     "mon": "mon",
     "monday": "mon",
@@ -283,6 +287,14 @@ def _template_result_is_truthy(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in _FALSE_TEMPLATE_VALUES
     return bool(value)
+
+
+def _is_queue_file_name(name: str) -> bool:
+    """Return True when a queue-folder filename should be considered."""
+    lower = name.lower()
+    if name.startswith(".") or lower.endswith(_QUEUE_IGNORED_SUFFIXES):
+        return False
+    return is_printable_attachment(name, "", include_unsupported=False)
 
 
 def _first_or_none(values: list[str]) -> str | None:
@@ -531,6 +543,15 @@ class BusyPrintJob:
         }
 
 
+@dataclass(frozen=True)
+class QueueFolderFile:
+    """A stable supported file found in the configured queue folder."""
+
+    path: str
+    filename: str
+    mtime: float
+
+
 @dataclass
 class AutoPrintData:
     """Snapshot of integration state exposed to entities."""
@@ -565,6 +586,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self._pending_jobs: list[PendingJob] = []
         self._printer_busy_jobs: list[BusyPrintJob] = []
         self._printer_busy_queue_task: asyncio.Task | None = None
+        self._processing_queue_files: set[str] = set()
+        self._processed_queue_files: dict[str, float] = {}
         self._last_schedule_state: bool | None = None  # track open↔closed transitions
         # Deduplication: maps "uid:part_key" → datetime of last print to prevent
         # multiple blueprints firing on the same attachment from double-printing.
@@ -1723,6 +1746,82 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         stem, _ext = os.path.splitext(base)
         return f"{stem or 'email_attachments'}.pdf"
 
+    async def async_process_queue_folder(
+        self, *, request_refresh: bool = True
+    ) -> int:
+        """Print stable supported files from the configured queue folder."""
+        if not self._is_within_schedule():
+            return 0
+
+        candidates = await self.hass.async_add_executor_job(
+            self._queue_folder_files,
+            True,
+        )
+        processed = 0
+        for candidate in candidates:
+            if candidate.path in self._processing_queue_files:
+                continue
+            if self._processed_queue_files.get(candidate.path) == candidate.mtime:
+                continue
+
+            self._processing_queue_files.add(candidate.path)
+            try:
+                result = await self.async_print_file(
+                    candidate.path,
+                    request_refresh=False,
+                )
+                if result.success:
+                    processed += 1
+                    if self._auto_delete:
+                        deleted = await self.hass.async_add_executor_job(
+                            self._delete_queue_file,
+                            candidate.path,
+                        )
+                        if deleted:
+                            self._processed_queue_files.pop(candidate.path, None)
+                        else:
+                            self._processed_queue_files[candidate.path] = candidate.mtime
+                    else:
+                        self._processed_queue_files[candidate.path] = candidate.mtime
+                elif (
+                    result.skipped_attachments
+                    or str(result.error or "").startswith("Cannot read")
+                ):
+                    self._processed_queue_files[candidate.path] = candidate.mtime
+            finally:
+                self._processing_queue_files.discard(candidate.path)
+
+        if processed and request_refresh:
+            await self.async_request_refresh()
+        return processed
+
+    def _queue_folder_files(self, require_stable: bool) -> list[QueueFolderFile]:
+        """Return supported queue-folder files sorted by name."""
+        try:
+            entries = list(os.scandir(self._queue_folder))
+        except OSError:
+            return []
+
+        now = time.time()
+        files: list[QueueFolderFile] = []
+        for entry in entries:
+            try:
+                if not entry.is_file() or not _is_queue_file_name(entry.name):
+                    continue
+                stat = entry.stat()
+            except OSError:
+                continue
+            if require_stable and now - stat.st_mtime < _QUEUE_FILE_STABLE_SECONDS:
+                continue
+            files.append(
+                QueueFolderFile(
+                    path=entry.path,
+                    filename=entry.name,
+                    mtime=stat.st_mtime,
+                )
+            )
+        return sorted(files, key=lambda item: item.filename.lower())
+
     async def async_print_file(
         self,
         file_path: str,
@@ -1732,6 +1831,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
+        *,
+        request_refresh: bool = True,
     ) -> PrintJobResult:
         """Print a supported file from disk and return the result."""
         filename = os.path.basename(file_path)
@@ -1749,6 +1850,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         if raw_data is None:
             result = PrintJobResult(filename=filename, success=False, error=f"Cannot read {file_path}")
             self._record_job(result)
+            if request_refresh:
+                await self.async_request_refresh()
             return result
 
         try:
@@ -1772,7 +1875,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 skipped_attachments=[f"{filename}: {error}"],
             )
             self._record_job(result)
-            await self.async_request_refresh()
+            if request_refresh:
+                await self.async_request_refresh()
             return result
 
         result = await self.async_send_print_job(
@@ -1790,7 +1894,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         result.attachments = [filename]
         result.merged_attachment_count = 1
         self._record_job(result)
-        await self.async_request_refresh()
+        if request_refresh:
+            await self.async_request_refresh()
         return result
 
     async def async_print_email(
@@ -2009,14 +2114,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             logger.debug("Could not create filter-preview notification", exc_info=True)
 
     async def _async_delete_queue_pdfs(self) -> int:
-        """Delete PDF files that are still waiting in the queue folder."""
+        """Delete supported files that are still waiting in the queue folder."""
         folder = self._queue_folder
 
         def _do_clear() -> int:
             deleted = 0
             try:
                 for name in os.listdir(folder):
-                    if name.lower().endswith(".pdf"):
+                    if _is_queue_file_name(name):
                         try:
                             os.remove(os.path.join(folder, name))
                             deleted += 1
@@ -2029,7 +2134,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return await self.hass.async_add_executor_job(_do_clear)
 
     async def async_clear_queue(self) -> int:
-        """Delete all PDFs in the configured queue folder."""
+        """Delete all supported queue-folder files."""
         deleted = await self._async_delete_queue_pdfs()
         await self.async_request_refresh()
         return deleted
@@ -2047,8 +2152,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     async def async_cancel_queued_jobs(self) -> int:
         """Discard jobs that Print Bridge has not submitted to the printer yet.
 
-        This clears both schedule-held IMAP jobs and PDFs in the configured
-        queue folder. It cannot recall a job once the printer has accepted it.
+        This clears schedule-held IMAP jobs, printer-busy retry jobs, and
+        supported files in the configured queue folder. It cannot recall a job
+        once the printer has accepted it.
         """
         pending_count = len(self._pending_jobs)
         self._pending_jobs.clear()
@@ -2057,7 +2163,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         total = pending_count + busy_count + deleted_files
         if total:
             logger.info(
-                "Cancelled %d queued job(s): %d schedule-held, %d printer-busy, %d file-queue PDF(s)",
+                "Cancelled %d queued job(s): %d schedule-held, %d printer-busy, %d file-queue file(s)",
                 total,
                 pending_count,
                 busy_count,
@@ -2617,9 +2723,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return len(jobs)
 
     async def _async_update_data(self) -> AutoPrintData:
-        """Check printer reachability, queue depth, and flush pending if schedule just opened."""
+        """Check printer state, process folder intake, and flush scheduled jobs."""
         printer_online = await self._async_check_printer_online()
-        queue_depth = await self.hass.async_add_executor_job(self._count_queue_files)
 
         # Auto-flush pending jobs when the print window opens.
         currently_open = self._is_within_schedule()
@@ -2634,7 +2739,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         if self._printer_busy_jobs:
             self._start_printer_busy_queue()
 
+        if self._auto_print_enabled and currently_open:
+            await self.async_process_queue_folder(request_refresh=False)
+
         self._last_schedule_state = currently_open
+        queue_depth = await self.hass.async_add_executor_job(self._count_queue_files)
 
         last_job = self._job_history[0] if self._job_history else None
         return AutoPrintData(
@@ -2666,14 +2775,16 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return False
 
     def _count_queue_files(self) -> int:
+        return len(self._queue_folder_files(False))
+
+    @staticmethod
+    def _delete_queue_file(path: str) -> bool:
         try:
-            return sum(
-                1
-                for name in os.listdir(self._queue_folder)
-                if name.lower().endswith(".pdf")
-            )
+            os.remove(path)
+            return True
         except OSError:
-            return 0
+            logger.warning("Could not delete queue file '%s'", path)
+            return False
 
     def _record_job(self, result: PrintJobResult) -> None:
         """Prepend result to history and fire an audit event."""

@@ -1,9 +1,9 @@
 """Print Bridge integration setup.
 
 Architecture: this component subscribes to imap_content events fired by HA's
-built-in IMAP integration.  When printable attachments are detected it calls
-imap.fetch_part to retrieve the bytes, converts non-PDF files to PDF, and sends
-the job to CUPS or a direct IPP printer.
+built-in IMAP integration and can also print supported files dropped into the
+configured queue folder. Printable inputs are converted to PDF when needed and
+sent to CUPS or a direct IPP printer.
 """
 
 from __future__ import annotations
@@ -188,8 +188,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) ->
                 (
                     "**Print Bridge is installed!** \n\n"
                     "Automatic printing is **disabled** until you choose a mode:\n\n"
-                    "1. **Simple auto-print** — go to *Settings → Print Bridge → Configure* "
-                    "and turn on *Enable automatic printing*.\n"
+                    "1. **Folder intake** — put supported files in the configured "
+                    "Print Queue Folder and turn on *Enable automatic printing*.\n"
                     "2. **Blueprint (advanced)** — "
                     "[import the automation blueprint]"
                     "(https://my.home-assistant.io/redirect/blueprint_import"
