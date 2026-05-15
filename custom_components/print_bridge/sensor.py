@@ -284,7 +284,9 @@ class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
     @property
     def native_value(self) -> int:
         data = self.coordinator.data
-        return len(data.pending_jobs) if data else 0
+        if not data:
+            return 0
+        return len(data.pending_jobs) + len(data.printer_busy_jobs)
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -297,7 +299,9 @@ class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
         opts = self._entry.options
         data = self.coordinator.data
         pending_jobs = data.pending_jobs if data else []
-        visible_jobs = pending_jobs[:_MAX_DISPLAYED_PENDING_JOBS]
+        busy_jobs = data.printer_busy_jobs if data else []
+        all_jobs = [*pending_jobs, *busy_jobs]
+        visible_jobs = all_jobs[:_MAX_DISPLAYED_PENDING_JOBS]
         return {
             "schedule_enabled": opts.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED),
             "schedule_start": opts.get(CONF_SCHEDULE_START, DEFAULT_SCHEDULE_START),
@@ -306,7 +310,9 @@ class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
             "schedule_template": opts.get(
                 CONF_SCHEDULE_TEMPLATE, DEFAULT_SCHEDULE_TEMPLATE
             ),
-            "total_jobs": len(pending_jobs),
+            "total_jobs": len(all_jobs),
+            "schedule_jobs": len(pending_jobs),
+            "printer_busy_jobs": len(busy_jobs),
             "shown_jobs": len(visible_jobs),
             "jobs": [j.as_dict() for j in visible_jobs],
         }

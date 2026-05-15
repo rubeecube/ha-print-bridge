@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.24] — 2026-05-15
+
+### Added
+
+- **Printer-busy retry queue** — direct IPP jobs rejected with `server-error-busy` or `server-error-not-accepting-jobs` are queued, printer readiness is polled, and the job is resent automatically when the printer is available.
+- **Printer readiness attributes** — capability checks now include `printer-is-accepting-jobs`, `printer-state`, `printer-state-reasons`, and `queued-job-count`.
+- **README use cases and rationale** — documentation now explains the main email-to-print use cases and why this needs a dedicated integration instead of only HA IMAP, HA IPP, or an automation blueprint.
+
+### Changed
+
+- The queued-jobs sensor and cancel button now include printer-busy retry jobs as well as schedule-held jobs.
+- Status notifications and status replies report printer-busy jobs as `queued` instead of implying the printer accepted them immediately.
+
+### Fixed
+
+- IPP status `0x0507` is now reported as `server-error-busy`, and `0x0506` is now reported as `server-error-not-accepting-jobs`.
+- Bumped package metadata to `0.1.24`.
+
+---
+
 ## [0.1.23] — 2026-05-15
 
 ### Added
@@ -299,6 +319,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.24]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.24
 [0.1.23]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.23
 [0.1.22]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.22
 [0.1.21]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.21

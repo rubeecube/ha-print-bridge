@@ -58,6 +58,8 @@ _IPP_STATUS_NAMES = {
     0x0503: "server-error-service-unavailable",
     0x0504: "server-error-version-not-supported",
     0x0505: "server-error-device-error",
+    0x0506: "server-error-not-accepting-jobs",
+    0x0507: "server-error-busy",
 }
 
 
@@ -168,9 +170,19 @@ _REQUESTED_CAPABILITY_ATTRIBUTES = (
     "pwg-raster-document-resolution-supported",
     "pwg-raster-document-sheet-back",
     "sides-supported",
+    "printer-is-accepting-jobs",
+    "printer-state",
+    "printer-state-reasons",
+    "queued-job-count",
     "printer-make-and-model",
     "printer-name",
 )
+
+_IPP_PRINTER_STATE_NAMES = {
+    3: "idle",
+    4: "processing",
+    5: "stopped",
+}
 
 
 def build_ipp_packet(
@@ -305,6 +317,19 @@ def parse_ipp_attributes(response: bytes) -> dict[str, list[str]]:
             attrs.setdefault(current_name, []).append(
                 value.decode("utf-8", errors="replace")
             )
+        elif tag == 0x22 and value_len == 1:  # boolean
+            attrs.setdefault(current_name, []).append(
+                "true" if value != b"\x00" else "false"
+            )
+        elif tag in (_TAG_INTEGER, _TAG_ENUM) and value_len == 4:
+            rendered_int = struct.unpack(">i", value)[0]
+            if current_name == "printer-state":
+                rendered = _IPP_PRINTER_STATE_NAMES.get(
+                    rendered_int, str(rendered_int)
+                )
+            else:
+                rendered = str(rendered_int)
+            attrs.setdefault(current_name, []).append(rendered)
         elif tag == 0x32 and value_len == 9:  # resolution
             xres, yres, units = struct.unpack(">IIB", value)
             suffix = "dpi" if units == 3 else "dpcm"

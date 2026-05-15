@@ -47,6 +47,7 @@ from custom_components.print_bridge.const import (
 from custom_components.print_bridge.coordinator import (
     AutoPrintData,
     FilterPreviewResult,
+    BusyPrintJob,
     PendingJob,
     PrintJobResult,
 )
@@ -168,6 +169,40 @@ async def test_scheduled_queue_sensor_shows_max_five_jobs(
     assert state.attributes["total_jobs"] == 7
     assert state.attributes["shown_jobs"] == 5
     assert [job["uid"] for job in state.attributes["jobs"]] == ["0", "1", "2", "3", "4"]
+
+
+async def test_pending_jobs_sensor_includes_printer_busy_jobs(
+    hass: HomeAssistant,
+) -> None:
+    pending = PendingJob(
+        entry_id="imap_entry_1",
+        uid="1",
+        part_key="1",
+        filename="scheduled.pdf",
+    )
+    busy = BusyPrintJob(
+        filename="busy.pdf",
+        pdf_data=b"%PDF-1.4",
+        duplex_mode="one-sided",
+        booklet=False,
+    )
+    entry = await _setup(
+        hass,
+        AutoPrintData(
+            queue_depth=0,
+            printer_online=True,
+            pending_jobs=[pending],
+            printer_busy_jobs=[busy],
+        ),
+    )
+
+    state = hass.states.get(_entity_id(hass, entry, SENSOR_PENDING_JOBS))
+
+    assert state.state == "2"
+    assert state.attributes["total_jobs"] == 2
+    assert state.attributes["schedule_jobs"] == 1
+    assert state.attributes["printer_busy_jobs"] == 1
+    assert state.attributes["jobs"][1]["queue_type"] == "printer_busy"
 
 
 # ---------------------------------------------------------------------------
@@ -363,8 +398,10 @@ async def test_button_press_failure_raises(hass: HomeAssistant) -> None:
         await hass.services.async_call("button", "press", {"entity_id": btn}, blocking=True)
 
 
+@pytest.mark.parametrize("expected_lingering_timers", [True])
 async def test_cancel_queued_jobs_button_clears_waiting_work(
     hass: HomeAssistant,
+    expected_lingering_timers: bool,
 ) -> None:
     pending = PendingJob(
         entry_id="imap_entry_1",
@@ -392,6 +429,46 @@ async def test_cancel_queued_jobs_button_clears_waiting_work(
 
     mock_delete.assert_awaited_once()
     assert entry.runtime_data._pending_jobs == []
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_cancel_queued_jobs_button_clears_printer_busy_jobs(
+    hass: HomeAssistant,
+    expected_lingering_timers: bool,
+) -> None:
+    busy = BusyPrintJob(
+        filename="busy.pdf",
+        pdf_data=b"%PDF-1.4",
+        duplex_mode="one-sided",
+        booklet=False,
+    )
+    entry = await _setup(
+        hass,
+        AutoPrintData(
+            queue_depth=0,
+            printer_online=True,
+            printer_busy_jobs=[busy],
+        ),
+    )
+    entry.runtime_data._printer_busy_jobs.append(busy)
+    btn = _entity_id(hass, entry, BUTTON_CANCEL_QUEUED_JOBS)
+
+    with (
+        patch.object(
+            entry.runtime_data,
+            "_async_delete_queue_pdfs",
+            new=AsyncMock(return_value=0),
+        ),
+        patch.object(
+            entry.runtime_data,
+            "async_cancel_printer_busy_queue_task",
+            new=AsyncMock(),
+        ) as mock_cancel_task,
+    ):
+        await hass.services.async_call("button", "press", {"entity_id": btn}, blocking=True)
+
+    mock_cancel_task.assert_awaited_once()
+    assert entry.runtime_data._printer_busy_jobs == []
 
 
 async def test_preview_email_buttons_registered(hass: HomeAssistant) -> None:
