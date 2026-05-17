@@ -366,6 +366,26 @@ async def test_unsupported_attachment_not_fetched(hass: HomeAssistant) -> None:
     mock_process.assert_not_called()
 
 
+async def test_body_parts_without_filenames_do_not_trigger_auto_print(
+    hass: HomeAssistant,
+) -> None:
+    """Email body text/html parts are ignored when no attachment filename exists."""
+    _, coordinator = await _setup_coordinator(hass)
+    body_parts = {
+        "0": {"content_type": "text/plain"},
+        "0,1": {"content_type": "text/html"},
+    }
+
+    with (
+        patch.object(coordinator, "async_process_imap_message", new=AsyncMock()) as mock_process,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()) as mock_refresh,
+    ):
+        await coordinator.async_handle_imap_event(_event(parts=body_parts))
+
+    mock_process.assert_not_called()
+    mock_refresh.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # Sender filtering
 # ---------------------------------------------------------------------------
@@ -871,6 +891,63 @@ async def test_process_imap_message_merges_printable_attachments_into_one_job(
     assert result.attachments == ["first.pdf", "notes.txt"]
     assert result.merged_attachment_count == 2
     assert result.source_format == "mixed"
+
+
+async def test_process_imap_message_skips_body_parts_without_filenames(
+    hass: HomeAssistant,
+) -> None:
+    """Plain/html body parts without filenames are not printable attachments."""
+    _, coordinator = await _setup_coordinator(hass)
+    pdf_data = _make_a4_pdf(page_count=1)
+    parts = {
+        "0": {"content_type": "text/plain"},
+        "0,1": {"content_type": "text/html"},
+        "1": {"content_type": "application/pdf", "filename": "document.pdf"},
+    }
+    fetched: list[str] = []
+
+    async def _fetch_part(call: ServiceCall) -> dict:
+        fetched.append(str(call.data["part"]))
+        assert call.data["part"] == "1"
+        return {
+            "part_data": base64.b64encode(pdf_data).decode(),
+            "content_transfer_encoding": "base64",
+            "content_type": "application/pdf",
+        }
+
+    hass.services.async_register(
+        "imap",
+        "fetch_part",
+        _fetch_part,
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    send_result = PrintJobResult(filename="message.pdf", success=True)
+    with (
+        patch.object(
+            coordinator,
+            "async_send_print_job",
+            new=AsyncMock(return_value=send_result),
+        ) as mock_send,
+        patch.object(coordinator, "_async_send_status_reply", new=AsyncMock()),
+        patch.object(coordinator, "_async_notify_job", new=AsyncMock()),
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        result = await coordinator.async_process_imap_message(
+            entry_id="imap_entry_1",
+            uid="99",
+            parts=parts,
+            sender="sender@example.com",
+            mail_subject="Body parts",
+            mail_text="",
+        )
+
+    mock_send.assert_awaited_once()
+    merged_pdf = mock_send.call_args.args[1]
+    assert len(PdfReader(io.BytesIO(merged_pdf)).pages) == 1
+    assert fetched == ["1"]
+    assert result.attachments == ["document.pdf"]
+    assert result.merged_attachment_count == 1
 
 
 async def test_process_imap_message_reports_skipped_unsupported_attachments(

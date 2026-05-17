@@ -7,8 +7,8 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-177%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.25-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-179%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.26-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
@@ -699,7 +699,7 @@ A: `http://<cups-host>:631`. When using the CUPS add-on on HA OS with host netwo
 Pull requests are welcome. Please open an issue first for significant changes.
 
 ```bash
-./venv/bin/pytest tests/ -v   # 177 tests, no external dependencies required
+./venv/bin/pytest tests/ -v   # 179 tests, no external dependencies required
 ```
 
 ---

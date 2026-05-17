@@ -172,14 +172,16 @@ condition:
       {% for part in _parts.values() %}
         {% set ctype = (part.content_type | string | lower).split(';')[0] | trim %}
         {% set filename = (part.filename or part.get('file_name', '') or '') | lower %}
-        {% if ctype in printable_mimes %}
-          {% set ns.has_printable = true %}
-        {% else %}
-          {% for ext in printable_exts %}
-            {% if filename.endswith(ext) %}
-              {% set ns.has_printable = true %}
-            {% endif %}
-          {% endfor %}
+        {% if filename %}
+          {% if ctype in printable_mimes %}
+            {% set ns.has_printable = true %}
+          {% else %}
+            {% for ext in printable_exts %}
+              {% if filename.endswith(ext) %}
+                {% set ns.has_printable = true %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
         {% endif %}
       {% endfor %}
       {{ ns.has_printable }}
