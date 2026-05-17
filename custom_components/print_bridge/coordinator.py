@@ -227,19 +227,26 @@ def _send_status_email_smtp(
         smtp.send_message(email)
 
 
+def _part_filename(part_info: dict[str, Any]) -> str:
+    """Return the decoded filename declared by an IMAP part, if any."""
+    filename = part_info.get("filename") or part_info.get("file_name")
+    if not filename:
+        return ""
+    return _decode_mime_filename(str(filename))
+
+
 def _attachment_filename(part_key: str, part_info: dict[str, Any]) -> str:
     """Return a cleaned attachment filename from IMAP part metadata."""
-    return _decode_mime_filename(
-        part_info.get("filename")
-        or part_info.get("file_name")
-        or f"attachment_{part_key}"
-    )
+    return _part_filename(part_info) or f"attachment_{part_key}"
 
 
 def _is_printable_part(part_key: str, part_info: dict[str, Any]) -> bool:
     """Return True for supported or known unsupported printable attachments."""
+    filename = _part_filename(part_info)
+    if not filename:
+        return False
     return is_printable_attachment(
-        _attachment_filename(part_key, part_info),
+        filename,
         str(part_info.get("content_type", "")),
         include_unsupported=True,
     )
@@ -1701,7 +1708,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         summary = AttachmentConversionSummary()
         for part_key, part_info in sorted(parts.items()):
             key = str(part_key)
-            filename = _attachment_filename(key, part_info)
+            filename = _part_filename(part_info)
+            if not filename:
+                continue
             content_type = str(part_info.get("content_type", ""))
             resolved = printable_type(filename, content_type)
             if resolved is None:

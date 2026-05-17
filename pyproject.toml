@@ -8,7 +8,7 @@ build-backend = "setuptools.backends.legacy:build"
 
 [project]
 name = "print-bridge"
-version = "0.1.25"
+version = "0.1.26"
 description = "Print Bridge: Home Assistant custom component to automatically print common email attachments or local queue-folder files, with direct IPP/AirPrint and CUPS support, conversion, booklet printing, schedule, audit log, and retry."
 readme = "README.md"
 license = { text = "MIT" }
