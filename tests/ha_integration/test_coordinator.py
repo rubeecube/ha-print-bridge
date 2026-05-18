@@ -49,8 +49,19 @@ from custom_components.print_bridge.mail_params import parse_mail_print_paramete
 
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
 
-_FAKE_PDF = b"%PDF-1.4 fake"
 _LOOPBACK_HOST = socket.gethostbyname("localhost")
+
+
+def _make_pdf_with_widths(widths: list[int]) -> bytes:
+    writer = PdfWriter()
+    for width in widths:
+        writer.add_blank_page(width=width, height=842)
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+_FAKE_PDF = _make_pdf_with_widths([595])
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +173,15 @@ def _make_a4_pdf(page_count: int = 4) -> bytes:
     return buf.getvalue()
 
 
+def _pdf_payload_from_ipp_packet(packet: bytes) -> bytes:
+    return packet[packet.index(b"%PDF"):]
+
+
+def _pdf_page_widths(pdf_data: bytes) -> list[int]:
+    reader = PdfReader(io.BytesIO(pdf_data))
+    return [int(page.mediabox.width) for page in reader.pages]
+
+
 def _make_stable_file(path, content: bytes = b"print me") -> None:
     path.write_bytes(content)
     stable_time = time.time() - 10
@@ -252,6 +272,7 @@ async def test_pdf_event_triggers_fetch_and_print(hass: HomeAssistant) -> None:
         orientation=None,
         media=None,
         raster_dpi=None,
+        reverse_order=None,
         mail_subject="",
         mail_text="",
     )
@@ -319,6 +340,7 @@ async def test_mail_params_override_imap_event_print_settings(
         "orientation": "landscape",
         "media": "iso_a4_210x297mm",
         "raster_dpi": 150,
+        "reverse_order": None,
         "mail_subject": "[pb duplex=short-edge copies=2 dpi=150]",
         "mail_text": "Print-Bridge: booklet=true; paper=a4; orientation=landscape",
     }
@@ -774,24 +796,24 @@ async def test_status_reply_uses_configured_notify_service(
 
     hass.services.async_register("notify", "smtp", _notify)
 
+    result = PrintJobResult(
+        filename="booklet.pdf",
+        success=True,
+        duplex="two-sided-short-edge",
+        booklet=True,
+        copies=2,
+        orientation="landscape",
+        media="iso_a4_210x297mm",
+        sides="two-sided-short-edge",
+        document_format="application/pdf",
+        status_code="IPP 0x0000",
+        status="successful-ok",
+    )
+
     await coordinator._async_send_status_reply(
         sender="sender@example.com",
         subject="Weekly PDF",
-        results=[
-            PrintJobResult(
-                filename="booklet.pdf",
-                success=True,
-                duplex="two-sided-short-edge",
-                booklet=True,
-                copies=2,
-                orientation="landscape",
-                media="iso_a4_210x297mm",
-                sides="two-sided-short-edge",
-                document_format="application/pdf",
-                status_code="IPP 0x0000",
-                status="successful-ok",
-            )
-        ],
+        results=[result],
         params=parse_mail_print_parameters(
             "[pb copies=2]",
             "Print-Bridge: booklet=true; paper=a4; reply=true",
@@ -804,6 +826,10 @@ async def test_status_reply_uses_configured_notify_service(
     assert "Booklet: yes" in captured["message"]
     assert "Orientation: landscape" in captured["message"]
     assert "Media: iso_a4_210x297mm" in captured["message"]
+    assert result.status_reply_recipient == "sender@example.com"
+    assert result.status_reply_subject == "Re: Weekly PDF"
+    assert result.status_reply_message == captured["message"]
+    assert result.status_reply_delivery == "sent via notify.smtp"
 
 
 async def test_status_reply_falls_back_to_imap_account_smtp(
@@ -822,6 +848,8 @@ async def test_status_reply_falls_back_to_imap_account_smtp(
     )
     imap_entry.add_to_hass(hass)
 
+    result = PrintJobResult(filename="booklet.pdf", success=True)
+
     with patch(
         "custom_components.print_bridge.coordinator._send_status_email_smtp"
     ) as mock_send:
@@ -829,7 +857,7 @@ async def test_status_reply_falls_back_to_imap_account_smtp(
             imap_entry_id=imap_entry.entry_id,
             sender="sender@example.com",
             subject="Weekly PDF",
-            results=[PrintJobResult(filename="booklet.pdf", success=True)],
+            results=[result],
             params=parse_mail_print_parameters("", "Print-Bridge: reply=true"),
         )
 
@@ -838,6 +866,8 @@ async def test_status_reply_falls_back_to_imap_account_smtp(
     assert mock_send.call_args.kwargs["port"] == 465
     assert mock_send.call_args.kwargs["sender"] == "print@example.com"
     assert mock_send.call_args.kwargs["recipient"] == "sender@example.com"
+    assert result.status_reply_subject == "Re: Weekly PDF"
+    assert result.status_reply_delivery == "sent via smtp mail.example.com:465"
 
 
 async def test_process_imap_message_merges_printable_attachments_into_one_job(
@@ -948,6 +978,46 @@ async def test_process_imap_message_skips_body_parts_without_filenames(
     assert fetched == ["1"]
     assert result.attachments == ["document.pdf"]
     assert result.merged_attachment_count == 1
+
+
+async def test_process_imap_message_ignores_filter_only_skips(
+    hass: HomeAssistant,
+) -> None:
+    """Wrong automations ignore messages when the attachment filter excludes all files."""
+    _, coordinator = await _setup_coordinator(hass)
+    parts = {
+        "1": {"content_type": "application/pdf", "filename": "invoice.pdf"},
+        "0,0": {"content_type": "text/plain"},
+    }
+
+    with (
+        patch.object(
+            coordinator,
+            "async_send_print_job",
+            new=AsyncMock(),
+        ) as mock_send,
+        patch.object(coordinator, "_async_send_status_reply", new=AsyncMock()) as mock_reply,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        result = await coordinator.async_process_imap_message(
+            entry_id="imap_entry_1",
+            uid="99",
+            parts=parts,
+            sender="sender@example.com",
+            attachment_filter="Au Puits",
+            mail_subject="Wrong automation",
+            mail_text="Print-Bridge: reply=true",
+        )
+
+    assert result.success is True
+    assert result.error is None
+    assert result.merged_attachment_count == 0
+    assert result.status_code == "skipped-filter"
+    assert result.attachments == []
+    assert "no attachments matched filter" in str(result.status)
+    assert "invoice.pdf" in result.skipped_attachments[0]
+    mock_send.assert_not_awaited()
+    mock_reply.assert_not_awaited()
 
 
 async def test_process_imap_message_reports_skipped_unsupported_attachments(
@@ -1071,6 +1141,7 @@ async def test_retry_job_refetches_and_prints(hass: HomeAssistant) -> None:
         orientation=None,
         media=None,
         raster_dpi=None,
+        reverse_order=None,
     )
 
 
@@ -1127,6 +1198,112 @@ async def test_send_print_job_posts_to_ipp_endpoint(hass: HomeAssistant) -> None
     assert result.success is True
     post_url = mock_session.post.call_args.args[0]
     assert post_url == "http://cups.local:631/printers/TestPrinter"
+
+
+async def test_send_print_job_reverses_one_sided_pdf_by_default(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    mock_resp.read = AsyncMock(return_value=_ipp_response())
+
+    mock_session = MagicMock()
+    mock_session.post.return_value = mock_resp
+
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        result = await coordinator.async_send_print_job(
+            "doc.pdf", _make_pdf_with_widths([100, 200, 300]), "one-sided", False
+        )
+
+    sent_pdf = _pdf_payload_from_ipp_packet(mock_session.post.call_args.kwargs["data"])
+    assert _pdf_page_widths(sent_pdf) == [300, 200, 100]
+    assert result.reverse_order is True
+    assert result.reverse_order_applied is True
+
+
+async def test_send_print_job_can_disable_reverse_order(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    mock_resp.read = AsyncMock(return_value=_ipp_response())
+
+    mock_session = MagicMock()
+    mock_session.post.return_value = mock_resp
+
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        result = await coordinator.async_send_print_job(
+            "doc.pdf",
+            _make_pdf_with_widths([100, 200, 300]),
+            "one-sided",
+            False,
+            reverse_order=False,
+        )
+
+    sent_pdf = _pdf_payload_from_ipp_packet(mock_session.post.call_args.kwargs["data"])
+    assert _pdf_page_widths(sent_pdf) == [100, 200, 300]
+    assert result.reverse_order is False
+    assert result.reverse_order_applied is False
+
+
+async def test_send_print_job_does_not_reverse_duplex_or_booklet(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    mock_resp.read = AsyncMock(return_value=_ipp_response())
+
+    mock_session = MagicMock()
+    mock_session.post.return_value = mock_resp
+
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        duplex_result = await coordinator.async_send_print_job(
+            "duplex.pdf",
+            _make_pdf_with_widths([100, 200, 300]),
+            "two-sided-long-edge",
+            False,
+        )
+
+    duplex_pdf = _pdf_payload_from_ipp_packet(mock_session.post.call_args.kwargs["data"])
+    assert _pdf_page_widths(duplex_pdf) == [100, 200, 300]
+    assert duplex_result.reverse_order is True
+    assert duplex_result.reverse_order_applied is False
+
+    mock_session.post.reset_mock()
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        booklet_result = await coordinator.async_send_print_job(
+            "booklet.pdf",
+            _make_a4_pdf(page_count=4),
+            "two-sided-short-edge",
+            True,
+        )
+
+    assert booklet_result.reverse_order is True
+    assert booklet_result.reverse_order_applied is False
 
 
 async def test_send_print_job_rejects_ipp_error_body(hass: HomeAssistant) -> None:
@@ -1233,6 +1410,7 @@ async def test_printer_busy_queue_waits_until_ready_then_resends(
         orientation=None,
         media=None,
         raster_dpi=None,
+        reverse_order=None,
         _queue_on_busy=False,
     )
     mock_record.assert_called_once_with(send_result)

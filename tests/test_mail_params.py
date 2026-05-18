@@ -48,3 +48,20 @@ def test_quality_alias_sets_raster_dpi():
     )
 
     assert params.raster_dpi == 600
+
+
+def test_reverse_order_params_are_parsed():
+    params = parse_mail_print_parameters(
+        "[pb reverse=false]",
+        "Print-Bridge: reverse_order=true",
+    )
+
+    assert params.reverse_order is True
+
+
+def test_order_alias_controls_reverse_order():
+    reversed_params = parse_mail_print_parameters("[pb order=reverse]", "")
+    normal_params = parse_mail_print_parameters("[pb page_order=normal]", "")
+
+    assert reversed_params.reverse_order is True
+    assert normal_params.reverse_order is False

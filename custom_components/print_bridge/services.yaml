@@ -44,6 +44,14 @@ print_email:
       default: false
       selector:
         boolean:
+    reverse_order:
+      name: Reverse One-sided Order
+      description: >-
+        Override whether one-sided jobs are printed last page first.
+        Leave empty to use the integration default. Duplex and booklet jobs are not reversed.
+      required: false
+      selector:
+        boolean:
     attachment_filter:
       name: Attachment Filter
       description: Optional filename substring; only matching printable attachments are included.
@@ -123,6 +131,14 @@ print_file:
         Overrides automatic booklet detection based on filename patterns.
       required: false
       default: false
+      selector:
+        boolean:
+    reverse_order:
+      name: Reverse One-sided Order
+      description: >-
+        Override whether one-sided jobs are printed last page first.
+        Leave empty to use the integration default. Duplex and booklet jobs are not reversed.
+      required: false
       selector:
         boolean:
     copies:
@@ -214,6 +230,14 @@ retry_job:
       required: false
       selector:
         boolean:
+    reverse_order:
+      name: Reverse One-sided Order Override
+      description: >-
+        Override whether this retried one-sided job is printed last page first.
+        Leave empty to reuse the original/default setting.
+      required: false
+      selector:
+        boolean:
 
 check_filter:
   name: Check Filter
@@ -294,6 +318,14 @@ process_imap_part:
         Overrides automatic booklet detection from filename patterns.
       required: false
       default: false
+      selector:
+        boolean:
+    reverse_order:
+      name: Reverse One-sided Order
+      description: >-
+        Override whether one-sided jobs are printed last page first.
+        Leave empty to use the integration default. Duplex and booklet jobs are not reversed.
+      required: false
       selector:
         boolean:
     attachment_filter:
@@ -405,6 +437,14 @@ process_imap_message:
       description: Reorder pages for saddle-stitch booklet printing.
       required: false
       default: false
+      selector:
+        boolean:
+    reverse_order:
+      name: Reverse One-sided Order
+      description: >-
+        Override whether one-sided jobs are printed last page first.
+        Leave empty to use the integration default. Duplex and booklet jobs are not reversed.
+      required: false
       selector:
         boolean:
     attachment_filter:

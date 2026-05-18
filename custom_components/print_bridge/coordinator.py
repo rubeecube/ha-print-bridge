@@ -61,6 +61,7 @@ from .const import (
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
     CONF_RASTER_DPI,
+    CONF_REVERSE_ORDER,
     CONF_AUTO_PRINT_ENABLED,
     CONF_SELECTED_IMAP_ENTRY_ID,
     CONF_SELECTED_PRINTER_ENTRY_ID,
@@ -79,6 +80,7 @@ from .const import (
     DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_QUEUE_FOLDER,
     DEFAULT_RASTER_DPI,
+    DEFAULT_REVERSE_ORDER,
     DEFAULT_AUTO_PRINT_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
     DEFAULT_SCHEDULE_DAYS,
@@ -93,6 +95,7 @@ from .const import (
 )
 from .imap_checker import EmailPreview, preview_mailbox
 from .mail_params import MailPrintParameters, parse_mail_print_parameters
+from .page_order import reverse_pdf_pages
 from .print_handler import (
     build_ipp_packet,
     build_get_printer_attributes_packet,
@@ -387,6 +390,8 @@ class PrintJobResult:
     orientation: str | None = None
     media: str | None = None
     raster_dpi: int | None = None
+    reverse_order: bool | None = None
+    reverse_order_applied: bool = False
     source_format: str | None = None
     converted_format: str | None = None
     attachments: list[str] = field(default_factory=list)
@@ -396,6 +401,10 @@ class PrintJobResult:
     document_format: str | None = None
     status_code: str | None = None
     status: str | None = None
+    status_reply_recipient: str | None = None
+    status_reply_subject: str | None = None
+    status_reply_message: str | None = None
+    status_reply_delivery: str | None = None
     timestamp: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
@@ -493,6 +502,7 @@ class PendingJob:
     orientation: str | None = None
     media: str | None = None
     raster_dpi: int | None = None
+    reverse_order: bool | None = None
     mail_text: str = ""
     mail_subject: str = ""
     mail_params: MailPrintParameters = field(default_factory=MailPrintParameters)
@@ -514,6 +524,7 @@ class PendingJob:
             "orientation": self.orientation,
             "media": self.media,
             "raster_dpi": self.raster_dpi,
+            "reverse_order": self.reverse_order,
             "message_level": self.message_level,
         }
 
@@ -530,6 +541,7 @@ class BusyPrintJob:
     orientation: str | None = None
     media: str | None = None
     raster_dpi: int | None = None
+    reverse_order: bool | None = None
     attempts: int = 0
     queued_at: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
@@ -546,6 +558,7 @@ class BusyPrintJob:
             "orientation": self.orientation,
             "media": self.media,
             "raster_dpi": self.raster_dpi,
+            "reverse_order": self.reverse_order,
             "attempts": self.attempts,
         }
 
@@ -664,6 +677,16 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return _normalise_raster_dpi(
             self._entry.options.get(CONF_RASTER_DPI, DEFAULT_RASTER_DPI)
         )
+
+    @property
+    def _reverse_order(self) -> bool:
+        """True when one-sided jobs should print last page first by default."""
+        return bool(
+            self._entry.options.get(CONF_REVERSE_ORDER, DEFAULT_REVERSE_ORDER)
+        )
+
+    def _resolve_reverse_order(self, reverse_order: bool | None) -> bool:
+        return self._reverse_order if reverse_order is None else bool(reverse_order)
 
     @property
     def _allowed_senders(self) -> list[str]:
@@ -920,6 +943,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 orientation=mail_params.orientation,
                 media=mail_params.media,
                 raster_dpi=mail_params.raster_dpi,
+                reverse_order=mail_params.reverse_order,
                 mail_subject=subject,
                 mail_text=str(event.data.get("text", "")),
                 mail_params=mail_params,
@@ -964,6 +988,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             orientation=mail_params.orientation,
             media=mail_params.media,
             raster_dpi=mail_params.raster_dpi,
+            reverse_order=mail_params.reverse_order,
             mail_subject=subject,
             mail_text=str(event.data.get("text", "")),
         )
@@ -986,6 +1011,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         media: str | None = None,
         raster_dpi: int | None = None,
         content_type: str | None = None,
+        reverse_order: bool | None = None,
     ) -> PrintJobResult:
         """Fetch one attachment via imap.fetch_part and print it.
 
@@ -1008,6 +1034,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename, success=False, error=str(exc),
                 sender=sender,
                 raster_dpi=raster_dpi,
+                reverse_order=self._resolve_reverse_order(reverse_order),
                 imap_entry_id=entry_id, imap_uid=uid, imap_part_key=part_key,
             )
 
@@ -1020,6 +1047,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename, success=False, error=str(exc),
                 sender=sender,
                 raster_dpi=raster_dpi,
+                reverse_order=self._resolve_reverse_order(reverse_order),
                 imap_entry_id=entry_id, imap_uid=uid, imap_part_key=part_key,
             )
 
@@ -1037,6 +1065,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename, success=False, error=error,
                 sender=sender,
                 raster_dpi=raster_dpi,
+                reverse_order=self._resolve_reverse_order(reverse_order),
                 source_format=(
                     printable_type(filename, effective_content_type).source_format
                     if printable_type(filename, effective_content_type)
@@ -1061,6 +1090,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             orientation=orientation,
             media=media,
             raster_dpi=raster_dpi,
+            reverse_order=reverse_order,
         )
         # Attach IMAP identifiers for future retry.
         result.sender = sender
@@ -1082,6 +1112,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         job: PrintJobResult,
         duplex_override: str | None = None,
         booklet_override: bool | None = None,
+        reverse_order_override: bool | None = None,
     ) -> PrintJobResult:
         """Re-fetch and reprint a previously recorded job.
 
@@ -1110,6 +1141,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 orientation=job.orientation,
                 media=job.media,
                 raster_dpi=job.raster_dpi,
+                reverse_order=(
+                    reverse_order_override
+                    if reverse_order_override is not None
+                    else job.reverse_order
+                ),
             )
 
         result = await self._async_fetch_and_print(
@@ -1124,6 +1160,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             orientation=job.orientation,
             media=job.media,
             raster_dpi=job.raster_dpi,
+            reverse_order=(
+                reverse_order_override
+                if reverse_order_override is not None
+                else job.reverse_order
+            ),
         )
         self._record_job(result)
         await self._async_notify_job(result)
@@ -1243,6 +1284,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return
         if not sender:
             logger.warning("Cannot send print status reply: sender address is empty")
+            for result in results:
+                result.status_reply_delivery = "not_sent: sender address is empty"
             await self._async_notify_status_reply_issue(
                 "Sender address is empty, so no status email could be sent."
             )
@@ -1250,14 +1293,21 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
         title = f"Re: {subject or 'Print Bridge status'}"
         message = self._format_status_reply(results, params)
+        for result in results:
+            result.status_reply_recipient = sender
+            result.status_reply_subject = title
+            result.status_reply_message = message
+            result.status_reply_delivery = "pending"
         service_ref = self._status_reply_notify_service
         if not service_ref:
-            await self._async_send_status_reply_via_smtp(
+            delivery = await self._async_send_status_reply_via_smtp(
                 imap_entry_id=imap_entry_id,
                 recipient=sender,
                 subject=title,
                 message=message,
             )
+            for result in results:
+                result.status_reply_delivery = delivery
             return
 
         domain, service = _split_notify_service(service_ref)
@@ -1272,6 +1322,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 },
                 blocking=True,
             )
+            for result in results:
+                result.status_reply_delivery = f"sent via {domain}.{service}"
         except Exception as exc:
             logger.warning(
                 "Status reply via %s.%s to %s failed: %s",
@@ -1280,6 +1332,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 sender,
                 exc,
             )
+            for result in results:
+                result.status_reply_delivery = f"failed via {domain}.{service}: {exc}"
             await self._async_notify_status_reply_issue(
                 f"Status reply via {domain}.{service} failed for {sender}: {exc}"
             )
@@ -1291,13 +1345,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         recipient: str,
         subject: str,
         message: str,
-    ) -> None:
+    ) -> str:
         """Send status reply through the matching IMAP account's SMTP server."""
         if not imap_entry_id:
             await self._async_notify_status_reply_issue(
                 "No IMAP entry was available for SMTP status reply fallback."
             )
-            return
+            return "not_sent: no IMAP entry for SMTP fallback"
 
         imap_entry = next(
             (
@@ -1311,7 +1365,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             await self._async_notify_status_reply_issue(
                 f"IMAP entry {imap_entry_id} was not found for SMTP status reply fallback."
             )
-            return
+            return f"not_sent: IMAP entry {imap_entry_id} not found"
 
         data = imap_entry.data
         server = str(data.get("server", "")).strip()
@@ -1325,7 +1379,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "The IMAP account does not expose enough credentials for SMTP status reply fallback. "
                 "Configure Status Reply Notify Service instead."
             )
-            return
+            return "not_sent: IMAP account has no SMTP credentials"
 
         try:
             await self.hass.async_add_executor_job(
@@ -1342,11 +1396,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     message=message,
                 )
             )
+            return f"sent via smtp {server}:{port}"
         except Exception as exc:
             logger.warning("SMTP status reply to %s failed: %s", recipient, exc)
             await self._async_notify_status_reply_issue(
                 f"SMTP status reply to {recipient} failed via {server}:{port}: {exc}"
             )
+            return f"failed via smtp {server}:{port}: {exc}"
 
     async def _async_notify_status_reply_issue(self, message: str) -> None:
         """Surface status reply delivery problems in HA instead of only logging."""
@@ -1431,6 +1487,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     f"Duplex: {result.duplex or 'default'}",
                     f"IPP sides: {result.sides or 'default'}",
                     f"Booklet: {'yes' if result.booklet else 'no'}",
+                    f"Reverse order: {'yes' if result.reverse_order else 'no'}",
+                    f"Reverse applied: {'yes' if result.reverse_order_applied else 'no'}",
                     f"Copies: {result.copies or 1}",
                     f"Orientation: {result.orientation or 'default'}",
                     f"Media: {result.media or 'default'}",
@@ -1463,6 +1521,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
+        reverse_order: bool | None = None,
         mail_subject: str | None = None,
         mail_text: str | None = None,
     ) -> PrintJobResult:
@@ -1489,6 +1548,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         effective_orientation = mail_params.orientation or orientation
         effective_media = mail_params.media or media
         effective_raster_dpi = mail_params.raster_dpi or raster_dpi
+        effective_reverse_order = (
+            mail_params.reverse_order
+            if mail_params.reverse_order is not None
+            else reverse_order
+        )
 
         # Decode RFC 2047 MIME-encoded filenames that arrive from the IMAP event.
         effective_filename = _decode_mime_filename(
@@ -1542,8 +1606,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             orientation=effective_orientation,
             media=effective_media,
             raster_dpi=effective_raster_dpi,
+            reverse_order=effective_reverse_order,
         )
-        self._record_job(result)
         await self._async_send_status_reply(
             imap_entry_id=entry_id,
             sender=sender,
@@ -1551,6 +1615,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             results=[result],
             params=mail_params,
         )
+        self._record_job(result)
         await self.async_request_refresh()
         return result
 
@@ -1567,6 +1632,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
+        reverse_order: bool | None = None,
         mail_subject: str | None = None,
         mail_text: str | None = None,
     ) -> PrintJobResult:
@@ -1588,6 +1654,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     success=False,
                     error=f"Failed to fetch email uid={uid}: {exc}",
                     sender=sender,
+                    reverse_order=self._resolve_reverse_order(reverse_order),
                     imap_entry_id=entry_id,
                     imap_uid=uid,
                     imap_part_key="message",
@@ -1608,6 +1675,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         effective_orientation = mail_params.orientation or orientation
         effective_media = mail_params.media or media
         effective_raster_dpi = mail_params.raster_dpi or raster_dpi
+        effective_reverse_order = (
+            mail_params.reverse_order
+            if mail_params.reverse_order is not None
+            else reverse_order
+        )
 
         summary = await self._async_convert_message_attachments(
             entry_id,
@@ -1618,6 +1690,42 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         job_filename = self._message_job_filename(mail_subject or "", uid, summary)
 
         if not summary.converted:
+            filter_text = (effective_attachment_filter or "").strip()
+            filter_excluded_all = (
+                bool(filter_text)
+                and bool(summary.skipped)
+                and all("does not match filter" in skipped for skipped in summary.skipped)
+            )
+            if filter_excluded_all:
+                status = f"skipped: no attachments matched filter '{filter_text}'"
+                result = PrintJobResult(
+                    filename=job_filename,
+                    success=True,
+                    sender=sender,
+                    duplex=effective_duplex,
+                    booklet=bool(
+                        mail_params.booklet
+                        if mail_params.booklet is not None
+                        else booklet_override
+                    ),
+                    copies=effective_copies or 1,
+                    orientation=effective_orientation,
+                    media=effective_media,
+                    raster_dpi=effective_raster_dpi,
+                    reverse_order=self._resolve_reverse_order(effective_reverse_order),
+                    attachments=[],
+                    skipped_attachments=list(summary.skipped),
+                    merged_attachment_count=0,
+                    status_code="skipped-filter",
+                    status=status,
+                    imap_entry_id=entry_id,
+                    imap_uid=uid,
+                    imap_part_key="message",
+                )
+                self._record_job(result)
+                await self.async_request_refresh()
+                return result
+
             error = "No printable attachments were converted"
             result = PrintJobResult(
                 filename=job_filename,
@@ -1634,6 +1742,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 orientation=effective_orientation,
                 media=effective_media,
                 raster_dpi=effective_raster_dpi,
+                reverse_order=self._resolve_reverse_order(effective_reverse_order),
                 attachments=[],
                 skipped_attachments=list(summary.skipped),
                 merged_attachment_count=0,
@@ -1642,7 +1751,6 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 imap_uid=uid,
                 imap_part_key="message",
             )
-            self._record_job(result)
             await self._async_send_status_reply(
                 imap_entry_id=entry_id,
                 sender=sender,
@@ -1650,6 +1758,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 results=[result],
                 params=mail_params,
             )
+            self._record_job(result)
             await self.async_request_refresh()
             return result
 
@@ -1675,6 +1784,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             orientation=effective_orientation,
             media=effective_media,
             raster_dpi=effective_raster_dpi,
+            reverse_order=effective_reverse_order,
         )
         result.sender = sender
         result.imap_entry_id = entry_id
@@ -1685,8 +1795,6 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         result.attachments = summary.filenames
         result.skipped_attachments = list(summary.skipped)
         result.merged_attachment_count = len(summary.converted)
-        self._record_job(result)
-        await self._async_notify_job(result)
         await self._async_send_status_reply(
             imap_entry_id=entry_id,
             sender=sender,
@@ -1694,6 +1802,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             results=[result],
             params=mail_params,
         )
+        self._record_job(result)
+        await self._async_notify_job(result)
         await self.async_request_refresh()
         return result
 
@@ -1840,6 +1950,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
+        reverse_order: bool | None = None,
         *,
         request_refresh: bool = True,
     ) -> PrintJobResult:
@@ -1857,7 +1968,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
         raw_data = await self.hass.async_add_executor_job(_read_file)
         if raw_data is None:
-            result = PrintJobResult(filename=filename, success=False, error=f"Cannot read {file_path}")
+            result = PrintJobResult(
+                filename=filename,
+                success=False,
+                error=f"Cannot read {file_path}",
+                reverse_order=self._resolve_reverse_order(reverse_order),
+            )
             self._record_job(result)
             if request_refresh:
                 await self.async_request_refresh()
@@ -1881,6 +1997,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     if printable_type(filename, None)
                     else None
                 ),
+                reverse_order=self._resolve_reverse_order(reverse_order),
                 skipped_attachments=[f"{filename}: {error}"],
             )
             self._record_job(result)
@@ -1897,6 +2014,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             orientation=orientation,
             media=media,
             raster_dpi=raster_dpi,
+            reverse_order=reverse_order,
         )
         result.source_format = converted.source_format
         result.converted_format = converted.converted_format
@@ -1918,6 +2036,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
+        reverse_order: bool | None = None,
     ) -> dict:
         """Print all printable attachments from one IMAP email by UID."""
         from homeassistant.exceptions import HomeAssistantError
@@ -1970,6 +2089,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             orientation=orientation,
             media=media,
             raster_dpi=raster_dpi,
+            reverse_order=reverse_order,
             mail_subject=subject,
             mail_text=body_text,
         )
@@ -1984,6 +2104,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     "error": result.error,
                     "attachments": list(result.attachments),
                     "skipped_attachments": list(result.skipped_attachments),
+                    "reverse_order": result.reverse_order,
+                    "reverse_order_applied": result.reverse_order_applied,
+                    "status_reply": {
+                        "recipient": result.status_reply_recipient,
+                        "subject": result.status_reply_subject,
+                        "message": result.status_reply_message,
+                        "delivery": result.status_reply_delivery,
+                    },
                 }
             ],
         }
@@ -2282,6 +2410,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
+        reverse_order: bool | None = None,
         _queue_on_busy: bool = True,
     ) -> PrintJobResult:
         """Build an IPP packet and POST it to CUPS."""
@@ -2302,6 +2431,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         effective_copies = copies or 1
         effective_media = media
         source_pdf_data = pdf_data
+        effective_reverse_order = self._resolve_reverse_order(reverse_order)
+        reverse_order_applied = False
         if booklet:
             duplex_mode = "two-sided-short-edge"
         if booklet:
@@ -2318,10 +2449,36 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     duplex=duplex_mode, booklet=booklet,
                     copies=effective_copies, orientation=effective_orientation,
                     media=effective_media, raster_dpi=effective_raster_dpi,
+                    reverse_order=effective_reverse_order,
+                    reverse_order_applied=reverse_order_applied,
                     status=error,
                 )
 
         sides = determine_sides(duplex_mode, booklet)
+        if effective_reverse_order and sides == "one-sided" and not booklet:
+            try:
+                pdf_data = await self.hass.async_add_executor_job(
+                    reverse_pdf_pages, pdf_data
+                )
+                reverse_order_applied = True
+            except Exception as exc:
+                error = _describe_exception(exc)
+                logger.error("Page-order reversal failed for '%s': %s", filename, error)
+                return PrintJobResult(
+                    filename=filename,
+                    success=False,
+                    error=error,
+                    duplex=duplex_mode,
+                    booklet=booklet,
+                    copies=effective_copies,
+                    orientation=effective_orientation,
+                    media=effective_media,
+                    raster_dpi=effective_raster_dpi,
+                    reverse_order=effective_reverse_order,
+                    reverse_order_applied=False,
+                    sides=sides,
+                    status=error,
+                )
         try:
             document_format, document_data = await self._async_prepare_document_for_printing(
                 pdf_data, sides, raster_dpi=effective_raster_dpi
@@ -2334,6 +2491,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 duplex=duplex_mode, booklet=booklet,
                 copies=effective_copies, orientation=effective_orientation,
                 media=effective_media, raster_dpi=effective_raster_dpi,
+                reverse_order=effective_reverse_order,
+                reverse_order_applied=reverse_order_applied,
                 sides=sides, status=error,
             )
         reported_raster_dpi = (
@@ -2377,6 +2536,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         duplex=duplex_mode, booklet=booklet,
                         copies=effective_copies, orientation=effective_orientation,
                         media=effective_media, raster_dpi=reported_raster_dpi,
+                        reverse_order=effective_reverse_order,
+                        reverse_order_applied=reverse_order_applied,
                         sides=sides, document_format=document_format,
                         status_code=error, status=error,
                     )
@@ -2389,6 +2550,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         duplex=duplex_mode, booklet=booklet,
                         copies=effective_copies, orientation=effective_orientation,
                         media=effective_media, raster_dpi=reported_raster_dpi,
+                        reverse_order=effective_reverse_order,
+                        reverse_order_applied=reverse_order_applied,
                         sides=sides, document_format=document_format,
                         status_code="HTTP 200", status=error,
                     )
@@ -2408,6 +2571,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         duplex=duplex_mode, booklet=booklet,
                         copies=effective_copies, orientation=effective_orientation,
                         media=effective_media, raster_dpi=reported_raster_dpi,
+                        reverse_order=effective_reverse_order,
+                        reverse_order_applied=reverse_order_applied,
                         sides=sides, document_format=document_format,
                         status_code=ipp_status_code, status=ipp_status,
                     )
@@ -2423,6 +2588,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         orientation=orientation,
                         media=media,
                         raster_dpi=raster_dpi,
+                        reverse_order=effective_reverse_order,
                     )
                     self._queue_printer_busy_job(busy_job)
                     queued_status = (
@@ -2441,6 +2607,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         orientation=effective_orientation,
                         media=effective_media,
                         raster_dpi=reported_raster_dpi,
+                        reverse_order=effective_reverse_order,
+                        reverse_order_applied=reverse_order_applied,
                         sides=sides,
                         document_format=document_format,
                         status_code="queued-busy",
@@ -2452,6 +2620,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     duplex=duplex_mode, booklet=booklet,
                     copies=effective_copies, orientation=effective_orientation,
                     media=effective_media, raster_dpi=reported_raster_dpi,
+                    reverse_order=effective_reverse_order,
+                    reverse_order_applied=reverse_order_applied,
                     sides=sides, document_format=document_format,
                     status_code=ipp_status_code, status=ipp_status,
                 )
@@ -2479,6 +2649,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     orientation=effective_orientation,
                     media=effective_media,
                     raster_dpi=reported_raster_dpi,
+                    reverse_order=effective_reverse_order,
+                    reverse_order_applied=reverse_order_applied,
                     sides=sides,
                     document_format=document_format,
                     status_code="timeout-submitted",
@@ -2490,6 +2662,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 duplex=duplex_mode, booklet=booklet,
                 copies=effective_copies, orientation=effective_orientation,
                 media=effective_media, raster_dpi=reported_raster_dpi,
+                reverse_order=effective_reverse_order,
+                reverse_order_applied=reverse_order_applied,
                 sides=sides, document_format=document_format,
                 status_code="timeout", status=error,
             )
@@ -2504,6 +2678,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 duplex=duplex_mode, booklet=booklet,
                 copies=effective_copies, orientation=effective_orientation,
                 media=effective_media, raster_dpi=reported_raster_dpi,
+                reverse_order=effective_reverse_order,
+                reverse_order_applied=reverse_order_applied,
                 sides=sides, document_format=document_format,
                 status_code="network-error", status=error,
             )
@@ -2572,6 +2748,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     orientation=job.orientation,
                     media=job.media,
                     raster_dpi=job.raster_dpi,
+                    reverse_order=job.reverse_order,
                     _queue_on_busy=False,
                 )
                 if result.status_code in {"IPP 0x0506", "IPP 0x0507"}:
@@ -2697,6 +2874,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     orientation=job.orientation,
                     media=job.media,
                     raster_dpi=job.raster_dpi,
+                    reverse_order=job.reverse_order,
                     mail_subject=job.mail_subject,
                     mail_text=job.mail_text,
                 )
@@ -2713,9 +2891,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     orientation=job.orientation,
                     media=job.media,
                     raster_dpi=job.raster_dpi,
+                    reverse_order=job.reverse_order,
                 )
-                self._record_job(result)
-                await self._async_notify_job(result)
             # Apply configured IMAP action now that the job has been printed.
             if result.success and (result.merged_attachment_count or 0) > 0:
                 await self._async_post_process_email(job.entry_id, job.uid)
@@ -2727,6 +2904,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     results=[result],
                     params=job.mail_params,
                 )
+                self._record_job(result)
+                await self._async_notify_job(result)
 
         await self.async_request_refresh()
         return len(jobs)
@@ -2816,6 +2995,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "orientation": result.orientation,
                 "media": result.media,
                 "raster_dpi": result.raster_dpi,
+                "reverse_order": result.reverse_order,
+                "reverse_order_applied": result.reverse_order_applied,
                 "sides": result.sides,
                 "document_format": result.document_format,
                 "status_code": result.status_code,
@@ -2825,6 +3006,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "attachments": list(result.attachments),
                 "skipped_attachments": list(result.skipped_attachments),
                 "merged_attachment_count": result.merged_attachment_count,
+                "status_reply_recipient": result.status_reply_recipient,
+                "status_reply_subject": result.status_reply_subject,
+                "status_reply_message": result.status_reply_message,
+                "status_reply_delivery": result.status_reply_delivery,
                 "timestamp": result.timestamp,
             },
         )

@@ -21,6 +21,8 @@ _KEY_VALUE_RE = re.compile(
 
 _TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 _FALSE_VALUES = {"0", "false", "no", "n", "off"}
+_REVERSE_ORDER_TRUE = {"reverse", "reversed", "last-first", "last-to-first", "desc", "descending"}
+_REVERSE_ORDER_FALSE = {"normal", "forward", "first-first", "first-to-last", "asc", "ascending"}
 
 _DUPLEX_ALIASES = {
     "one": "one-sided",
@@ -72,6 +74,7 @@ class MailPrintParameters:
     raster_dpi: int | None = None
     attachment_filter: str | None = None
     reply: bool | None = None
+    reverse_order: bool | None = None
 
     @property
     def has_values(self) -> bool:
@@ -86,6 +89,7 @@ class MailPrintParameters:
                 self.raster_dpi,
                 self.attachment_filter,
                 self.reply,
+                self.reverse_order,
             )
         )
 
@@ -100,6 +104,7 @@ class MailPrintParameters:
             "raster_dpi",
             "attachment_filter",
             "reply",
+            "reverse_order",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -138,6 +143,7 @@ def parse_mail_print_parameters(subject: str = "", body: str = "") -> MailPrintP
             or raw_pairs.get("file")
         ),
         reply=_parse_bool(raw_pairs.get("reply") or raw_pairs.get("status_reply")),
+        reverse_order=_parse_reverse_order(raw_pairs),
     )
 
 
@@ -160,6 +166,22 @@ def _parse_bool(value: str | None) -> bool | None:
     if normalized in _TRUE_VALUES:
         return True
     if normalized in _FALSE_VALUES:
+        return False
+    return None
+
+
+def _parse_reverse_order(raw_pairs: dict[str, str]) -> bool | None:
+    explicit = _parse_bool(raw_pairs.get("reverse_order") or raw_pairs.get("reverse"))
+    if explicit is not None:
+        return explicit
+
+    order = raw_pairs.get("order") or raw_pairs.get("page_order")
+    if not order:
+        return None
+    normalized = order.strip().lower().replace("_", "-").replace(" ", "-")
+    if normalized in _REVERSE_ORDER_TRUE:
+        return True
+    if normalized in _REVERSE_ORDER_FALSE:
         return False
     return None
 

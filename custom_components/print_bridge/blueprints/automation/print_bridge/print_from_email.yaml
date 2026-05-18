@@ -172,7 +172,9 @@ condition:
       {% for part in _parts.values() %}
         {% set ctype = (part.content_type | string | lower).split(';')[0] | trim %}
         {% set filename = (part.filename or part.get('file_name', '') or '') | lower %}
-        {% if filename %}
+        {% set filename_matches = attachment_filter | trim == ''
+           or attachment_filter | lower | trim in filename %}
+        {% if filename and filename_matches %}
           {% if ctype in printable_mimes %}
             {% set ns.has_printable = true %}
           {% else %}
@@ -201,11 +203,14 @@ action:
       sender: "{{ trigger.event.data.sender }}"
       mail_subject: "{{ trigger.event.data.subject }}"
       mail_text: "{{ trigger.event.data.text | default('') }}"
+    response_variable: print_bridge_result
 
   - alias: "Mark email as seen (optional)"
     if:
       - condition: template
-        value_template: "{{ mark_as_seen }}"
+        value_template: >
+          {{ mark_as_seen
+             and (print_bridge_result.merged_attachment_count | default(0) | int > 0) }}
     then:
       - action: imap.seen
         data:
