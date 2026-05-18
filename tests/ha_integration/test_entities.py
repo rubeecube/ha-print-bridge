@@ -29,6 +29,7 @@ from custom_components.print_bridge.const import (
     CONF_AUTO_PRINT_ENABLED,
     CONF_DIRECT_PRINTER_URL,
     CONF_DUPLEX_MODE,
+    CONF_REVERSE_ORDER,
     CONF_SELECTED_IMAP_ENTRY_ID,
     CONF_SELECTED_PRINTER_ENTRY_ID,
     CONF_SCHEDULE_START,
@@ -41,6 +42,7 @@ from custom_components.print_bridge.const import (
     SENSOR_PENDING_JOBS,
     SENSOR_QUEUE_DEPTH,
     SWITCH_AUTO_PRINT_ENABLED,
+    SWITCH_REVERSE_ORDER,
     TEXT_ALLOWED_SENDERS,
     TEXT_SCHEDULE_START,
 )
@@ -210,10 +212,23 @@ async def test_pending_jobs_sensor_includes_printer_busy_jobs(
 # ---------------------------------------------------------------------------
 
 async def test_last_job_success(hass: HomeAssistant) -> None:
-    job = PrintJobResult(filename="doc.pdf", success=True)
+    job = PrintJobResult(
+        filename="doc.pdf",
+        success=True,
+        reverse_order=True,
+        reverse_order_applied=True,
+        status_reply_recipient="sender@example.com",
+        status_reply_subject="Re: Print",
+        status_reply_message="Print Bridge status",
+        status_reply_delivery="sent via notify.smtp",
+    )
     data = AutoPrintData(queue_depth=0, printer_online=True, last_job=job, job_history=[job])
     entry = await _setup(hass, data)
-    assert hass.states.get(_entity_id(hass, entry, SENSOR_LAST_JOB)).state == "success"
+    state = hass.states.get(_entity_id(hass, entry, SENSOR_LAST_JOB))
+    assert state.state == "success"
+    assert state.attributes["reverse_order"] is True
+    assert state.attributes["reverse_order_applied"] is True
+    assert state.attributes["status_reply"]["message"] == "Print Bridge status"
 
 
 async def test_last_job_failure(hass: HomeAssistant) -> None:
@@ -316,6 +331,23 @@ async def test_config_switch_persists_option(hass: HomeAssistant) -> None:
     )
 
     assert entry.options[CONF_AUTO_PRINT_ENABLED] is False
+    assert hass.states.get(switch_id).state == "off"
+
+
+async def test_reverse_order_switch_persists_option(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, AutoPrintData(queue_depth=0, printer_online=True))
+    switch_id = _entity_id(hass, entry, SWITCH_REVERSE_ORDER)
+
+    assert hass.states.get(switch_id).state == "on"
+
+    await hass.services.async_call(
+        "switch",
+        "turn_off",
+        {"entity_id": switch_id},
+        blocking=True,
+    )
+
+    assert entry.options[CONF_REVERSE_ORDER] is False
     assert hass.states.get(switch_id).state == "off"
 
 

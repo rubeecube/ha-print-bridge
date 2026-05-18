@@ -120,6 +120,14 @@ class LastJobSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
         attrs["booklet"] = job.booklet
         attrs["source_format"] = job.source_format
         attrs["converted_format"] = job.converted_format
+        attrs["reverse_order"] = job.reverse_order
+        attrs["reverse_order_applied"] = job.reverse_order_applied
+        attrs["status_reply"] = {
+            "recipient": job.status_reply_recipient,
+            "subject": job.status_reply_subject,
+            "message": job.status_reply_message,
+            "delivery": job.status_reply_delivery,
+        }
         attrs["attachments"] = list(job.attachments)
         attrs["skipped_attachments"] = list(job.skipped_attachments)
         attrs["merged_attachment_count"] = job.merged_attachment_count
@@ -169,6 +177,8 @@ class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
                     "orientation": j.orientation,
                     "media": j.media,
                     "raster_dpi": j.raster_dpi,
+                    "reverse_order": j.reverse_order,
+                    "reverse_order_applied": j.reverse_order_applied,
                     "sides": j.sides,
                     "document_format": j.document_format,
                     "source_format": j.source_format,
@@ -178,6 +188,12 @@ class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
                     "merged_attachment_count": j.merged_attachment_count,
                     "status_code": j.status_code,
                     "status": j.status,
+                    "status_reply": {
+                        "recipient": j.status_reply_recipient,
+                        "subject": j.status_reply_subject,
+                        "message": j.status_reply_message,
+                        "delivery": j.status_reply_delivery,
+                    },
                     "can_retry": j.can_retry,
                     "uid": j.imap_uid,
                 }

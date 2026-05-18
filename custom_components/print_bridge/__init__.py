@@ -56,6 +56,7 @@ _PRINT_FILE_SCHEMA = vol.Schema(
         vol.Optional("raster_dpi"): vol.All(
             vol.Coerce(int), vol.Range(min=72, max=600)
         ),
+        vol.Optional("reverse_order"): cv.boolean,
     }
 )
 
@@ -74,6 +75,7 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
         vol.Optional("raster_dpi"): vol.All(
             vol.Coerce(int), vol.Range(min=72, max=600)
         ),
+        vol.Optional("reverse_order"): cv.boolean,
         vol.Optional("sender"): cv.string,
         vol.Optional("mail_subject"): cv.string,
         vol.Optional("mail_text"): cv.string,
@@ -94,6 +96,7 @@ _PROCESS_IMAP_MESSAGE_SCHEMA = vol.Schema(
         vol.Optional("raster_dpi"): vol.All(
             vol.Coerce(int), vol.Range(min=72, max=600)
         ),
+        vol.Optional("reverse_order"): cv.boolean,
         vol.Optional("sender"): cv.string,
         vol.Optional("mail_subject"): cv.string,
         vol.Optional("mail_text"): cv.string,
@@ -281,6 +284,7 @@ def _register_services(hass: HomeAssistant) -> None:
         orientation: str | None = call.data.get("orientation")
         media: str | None = call.data.get("media")
         raster_dpi: int | None = call.data.get("raster_dpi")
+        reverse_order: bool | None = call.data.get("reverse_order")
 
         coordinator = _get_any_coordinator(hass).selected_printer_coordinator
         result = await coordinator.async_print_file(
@@ -291,6 +295,7 @@ def _register_services(hass: HomeAssistant) -> None:
             orientation=orientation,
             media=media,
             raster_dpi=raster_dpi,
+            reverse_order=reverse_order,
         )
         if not result.success:
             raise HomeAssistantError(
@@ -302,7 +307,7 @@ def _register_services(hass: HomeAssistant) -> None:
         deleted = await coordinator.async_clear_queue()
         logger.debug("Cleared %d file(s) from the print queue", deleted)
 
-    async def _handle_process_imap_part(call: ServiceCall) -> None:
+    async def _handle_process_imap_part(call: ServiceCall) -> dict:
         """Service called by blueprints/automations to fetch an IMAP part and print it."""
         coordinator = _get_any_coordinator(hass).selected_printer_coordinator
         result = await coordinator.async_process_imap_part(
@@ -317,6 +322,7 @@ def _register_services(hass: HomeAssistant) -> None:
             orientation=call.data.get("orientation"),
             media=call.data.get("media"),
             raster_dpi=call.data.get("raster_dpi"),
+            reverse_order=call.data.get("reverse_order"),
             sender=call.data.get("sender"),
             mail_subject=call.data.get("mail_subject"),
             mail_text=call.data.get("mail_text"),
@@ -325,6 +331,20 @@ def _register_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(
                 f"Print job failed for '{result.filename}': {result.error}"
             )
+        return {
+            "filename": result.filename,
+            "success": result.success,
+            "status_code": result.status_code,
+            "status": result.status,
+            "reverse_order": result.reverse_order,
+            "reverse_order_applied": result.reverse_order_applied,
+            "status_reply": {
+                "recipient": result.status_reply_recipient,
+                "subject": result.status_reply_subject,
+                "message": result.status_reply_message,
+                "delivery": result.status_reply_delivery,
+            },
+        }
 
     async def _handle_process_imap_message(call: ServiceCall) -> dict:
         """Service called by blueprints/automations to print one email as one job."""
@@ -340,6 +360,7 @@ def _register_services(hass: HomeAssistant) -> None:
             orientation=call.data.get("orientation"),
             media=call.data.get("media"),
             raster_dpi=call.data.get("raster_dpi"),
+            reverse_order=call.data.get("reverse_order"),
             sender=call.data.get("sender"),
             mail_subject=call.data.get("mail_subject"),
             mail_text=call.data.get("mail_text"),
@@ -356,6 +377,14 @@ def _register_services(hass: HomeAssistant) -> None:
             "attachments": list(result.attachments),
             "skipped_attachments": list(result.skipped_attachments),
             "merged_attachment_count": result.merged_attachment_count,
+            "reverse_order": result.reverse_order,
+            "reverse_order_applied": result.reverse_order_applied,
+            "status_reply": {
+                "recipient": result.status_reply_recipient,
+                "subject": result.status_reply_subject,
+                "message": result.status_reply_message,
+                "delivery": result.status_reply_delivery,
+            },
         }
 
     hass.services.async_register(
@@ -367,6 +396,7 @@ def _register_services(hass: HomeAssistant) -> None:
         SERVICE_PROCESS_IMAP_PART,
         _handle_process_imap_part,
         schema=_PROCESS_IMAP_PART_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
     )
     hass.services.async_register(
         DOMAIN,
@@ -421,6 +451,7 @@ def _register_services(hass: HomeAssistant) -> None:
         imap_uid: str | None = call.data.get("uid")
         duplex: str | None = call.data.get("duplex")
         booklet: bool | None = call.data.get("booklet")
+        reverse_order: bool | None = call.data.get("reverse_order")
 
         if job_index is not None:
             history = coordinator._job_history
@@ -451,12 +482,21 @@ def _register_services(hass: HomeAssistant) -> None:
             job,
             duplex_override=duplex,
             booklet_override=booklet,
+            reverse_order_override=reverse_order,
         )
         return {
             "filename": result.filename,
             "success": result.success,
             "error": result.error,
             "timestamp": result.timestamp,
+            "reverse_order": result.reverse_order,
+            "reverse_order_applied": result.reverse_order_applied,
+            "status_reply": {
+                "recipient": result.status_reply_recipient,
+                "subject": result.status_reply_subject,
+                "message": result.status_reply_message,
+                "delivery": result.status_reply_delivery,
+            },
         }
 
     hass.services.async_register(
@@ -469,6 +509,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("uid"): cv.string,
                 vol.Optional("duplex"): vol.In(DUPLEX_MODES),
                 vol.Optional("booklet"): cv.boolean,
+                vol.Optional("reverse_order"): cv.boolean,
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,
@@ -489,6 +530,7 @@ def _register_services(hass: HomeAssistant) -> None:
         orientation: str | None = call.data.get("orientation")
         media: str | None = call.data.get("media")
         raster_dpi: int | None = call.data.get("raster_dpi")
+        reverse_order: bool | None = call.data.get("reverse_order")
 
         controller = _get_any_coordinator(hass)
         coordinator = controller.selected_printer_coordinator
@@ -502,6 +544,7 @@ def _register_services(hass: HomeAssistant) -> None:
             orientation=orientation,
             media=media,
             raster_dpi=raster_dpi,
+            reverse_order=reverse_order,
         )
 
     hass.services.async_register(
@@ -521,6 +564,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("raster_dpi"): vol.All(
                     vol.Coerce(int), vol.Range(min=72, max=600)
                 ),
+                vol.Optional("reverse_order"): cv.boolean,
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,
