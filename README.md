@@ -373,6 +373,7 @@ internal PDF first.
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
 | `copies` | no | Number of copies, 1-20 |
+| `collate` | no | Collate multi-copy jobs; default is `true` |
 | `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
 | `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
 | `raster_dpi` | no | Direct IPP raster conversion DPI, 72-600. Lower is faster; default is `150`. |
@@ -396,6 +397,7 @@ Used internally by the blueprint; callable from any automation or script.
 | `booklet` | no | Force booklet page reordering |
 | `attachment_filter` | no | Only print if the filename contains this text |
 | `copies` | no | Number of copies, 1-20 |
+| `collate` | no | Collate multi-copy jobs; default is `true` |
 | `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
 | `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
 | `raster_dpi` | no | Direct IPP raster conversion DPI, 72-600. Lower is faster; default is `150`. |
@@ -419,6 +421,7 @@ multiple attachments.
 | `booklet` | no | Force booklet page reordering |
 | `attachment_filter` | no | Only include attachment filenames containing this text |
 | `copies` | no | Number of copies, 1-20 |
+| `collate` | no | Collate multi-copy jobs; default is `true` |
 | `orientation` | no | `portrait` or `landscape`; booklet imposition is landscape |
 | `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
 | `raster_dpi` | no | Direct IPP raster conversion DPI, 72-600. Lower is faster; default is `150`. |
@@ -440,13 +443,17 @@ UID from the Lovelace email table or the `filter_preview` sensor.
 | `booklet` | no | Force booklet page reordering |
 | `attachment_filter` | no | Only print matching attachment filenames |
 | `copies` | no | Number of copies, 1-20 |
+| `collate` | no | Collate multi-copy jobs; default is `true` |
 | `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
 | `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
 | `raster_dpi` | no | Direct IPP raster conversion DPI, 72-600. Lower is faster; default is `150`. |
 
 ### Mail print parameters
 
-You can include per-email print settings in the subject or body. These override the integration defaults and blueprint/service values for that email.
+Allowed senders can include per-email print settings in the subject or body.
+These override the integration defaults and blueprint/service values for that
+email. If Allowed Senders is empty, normal auto-printing can still accept all
+senders, but mail-body configuration commands and overrides are ignored.
 
 Subject form:
 
@@ -460,19 +467,40 @@ Body form:
 Print-Bridge: attachment="Au Puits"; orientation=landscape; paper=a4; quality=fast
 ```
 
+Copies can also be requested with `nb_copies=3`, `copy=3`, or a body that only
+contains `3`.
+
+To get a ready-to-edit configuration template by email, an allowed sender can
+send a message with no attachment and:
+
+```text
+Print-Bridge: config
+```
+
+Print Bridge replies with a `Print-Bridge:` line containing the current defaults.
+Reply to that email, adjust the values, attach documents, and the retained line is
+used as the override for that print.
+
 Supported parameters:
 
 | Parameter | Values |
 |---|---|
 | `duplex` / `sides` | `one-sided`, `simplex`, `long-edge`, `short-edge`, `two-sided-long-edge`, `two-sided-short-edge` |
 | `booklet` | `true` / `false` |
-| `copies` | `1` through `20` |
+| `copies` / `nb_copies` / `copy` | `1` through `20` |
+| `collate` | `true` / `false`; default is `true` |
 | `orientation` | `portrait` / `landscape`; booklet jobs always request landscape |
 | `paper` / `media` | `a4`, `letter`, `legal`, or a raw IPP media keyword |
 | `dpi` / `raster_dpi` | `72` through `600`; only used when direct IPP requires raster conversion |
 | `quality` | `draft`, `fast`, `normal`, `high`, or `best` (`fast` maps to 150 DPI) |
 | `attachment` / `attachment_filter` / `file` | Filename substring to print only matching attachments |
 | `reply` / `status_reply` | `true` to request a status reply, `false` to suppress one |
+| `reverse` / `reverse_order` / `order` | `true`, `false`, `reverse`, or `normal` for one-sided page order |
+| `config` / `command=config` | Reply with all configurable mail parameters when no printable attachment is present |
+
+Boolean values are case-insensitive and accept `true`/`false`, `yes`/`no`,
+`on`/`off`, and `1`/`0`. Invalid values fail the job and return a status reply
+instead of silently printing with the wrong settings.
 
 Status replies include the IPP status code plus the effective printer settings used for each job. Print Bridge uses the configured Home Assistant notify service when set (for example `notify.smtp`); otherwise it attempts SMTP delivery through the matching HA IMAP account.
 

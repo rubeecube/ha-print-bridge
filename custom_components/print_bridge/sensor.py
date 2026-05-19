@@ -118,6 +118,8 @@ class LastJobSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
         if job.duplex:
             attrs["duplex"] = job.duplex
         attrs["booklet"] = job.booklet
+        attrs["copies"] = job.copies
+        attrs["collate"] = job.collate
         attrs["source_format"] = job.source_format
         attrs["converted_format"] = job.converted_format
         attrs["reverse_order"] = job.reverse_order
@@ -174,6 +176,7 @@ class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
                     "duplex": j.duplex,
                     "booklet": j.booklet,
                     "copies": j.copies,
+                    "collate": j.collate,
                     "orientation": j.orientation,
                     "media": j.media,
                     "raster_dpi": j.raster_dpi,

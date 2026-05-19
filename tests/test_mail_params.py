@@ -5,14 +5,16 @@ from custom_components.print_bridge.mail_params import parse_mail_print_paramete
 
 def test_subject_bracket_params_are_parsed():
     params = parse_mail_print_parameters(
-        "[pb duplex=short-edge copies=2 dpi=150 reply=true] Weekly packet",
+        "[pb duplex=short-edge nb_copies=2 collate=false dpi=150 reply=true] Weekly packet",
         "",
     )
 
     assert params.duplex == "two-sided-short-edge"
     assert params.copies == 2
+    assert params.collate is False
     assert params.raster_dpi == 150
     assert params.reply is True
+    assert params.errors == ()
 
 
 def test_body_print_bridge_line_supports_named_settings():
@@ -27,7 +29,7 @@ def test_body_print_bridge_line_supports_named_settings():
     assert params.attachment_filter == "Au Puits"
 
 
-def test_invalid_params_are_ignored():
+def test_invalid_params_report_errors():
     params = parse_mail_print_parameters(
         "[pb copies=30 orientation=sideways booklet=maybe dpi=1000]",
         "PB: sides=unknown; reply=no",
@@ -39,6 +41,7 @@ def test_invalid_params_are_ignored():
     assert params.duplex is None
     assert params.raster_dpi is None
     assert params.reply is False
+    assert len(params.errors) == 5
 
 
 def test_quality_alias_sets_raster_dpi():
@@ -65,3 +68,19 @@ def test_order_alias_controls_reverse_order():
 
     assert reversed_params.reverse_order is True
     assert normal_params.reverse_order is False
+
+
+def test_config_request_and_plain_body_copy_number_are_parsed():
+    config = parse_mail_print_parameters("[pb config]", "")
+    copies = parse_mail_print_parameters("Print", "3")
+
+    assert config.config_request is True
+    assert copies.copies == 3
+
+
+def test_invalid_bool_values_report_errors():
+    params = parse_mail_print_parameters("[pb collate=banana reverse=maybe]", "")
+
+    assert params.collate is None
+    assert params.reverse_order is None
+    assert len(params.errors) == 2

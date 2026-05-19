@@ -192,6 +192,7 @@ def build_ipp_packet(
     document_data: bytes,
     document_format: str = "application/pdf",
     copies: int | None = None,
+    collate: bool | None = None,
     orientation_requested: int | None = None,
     media: str | None = None,
     print_scaling: str | None = None,
@@ -207,6 +208,7 @@ def build_ipp_packet(
         document_data: Raw bytes of the document file appended after the IPP header.
         document_format: IPP document-format value for the appended bytes.
         copies: Optional IPP ``copies`` value.
+        collate: Optional collation mode for multi-copy jobs.
         orientation_requested: Optional IPP orientation enum
                               (3=portrait, 4=landscape).
         media: Optional IPP media keyword, e.g. ``iso_a4_210x297mm``.
@@ -229,6 +231,13 @@ def build_ipp_packet(
     header += _encode_attr(_TAG_KEYWORD, "sides", sides)
     if copies is not None:
         header += _encode_int_attr(_TAG_INTEGER, "copies", copies)
+    if collate is not None:
+        handling = (
+            "separate-documents-collated-copies"
+            if collate
+            else "separate-documents-uncollated-copies"
+        )
+        header += _encode_attr(_TAG_KEYWORD, "multiple-document-handling", handling)
     if orientation_requested is not None:
         header += _encode_int_attr(
             _TAG_ENUM, "orientation-requested", orientation_requested
