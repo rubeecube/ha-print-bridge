@@ -51,6 +51,7 @@ _PRINT_FILE_SCHEMA = vol.Schema(
         vol.Optional(FIELD_DUPLEX): vol.In(DUPLEX_MODES),
         vol.Optional(FIELD_BOOKLET, default=False): cv.boolean,
         vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
+        vol.Optional("collate"): cv.boolean,
         vol.Optional("orientation"): vol.In(("portrait", "landscape")),
         vol.Optional("media"): cv.string,
         vol.Optional("raster_dpi"): vol.All(
@@ -70,12 +71,14 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
         vol.Optional("booklet", default=False): cv.boolean,
         vol.Optional("attachment_filter"): cv.string,
         vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
+        vol.Optional("collate"): cv.boolean,
         vol.Optional("orientation"): vol.In(("portrait", "landscape")),
         vol.Optional("media"): cv.string,
         vol.Optional("raster_dpi"): vol.All(
             vol.Coerce(int), vol.Range(min=72, max=600)
         ),
         vol.Optional("reverse_order"): cv.boolean,
+        vol.Optional("mail_config_allowed"): cv.boolean,
         vol.Optional("sender"): cv.string,
         vol.Optional("mail_subject"): cv.string,
         vol.Optional("mail_text"): cv.string,
@@ -91,12 +94,14 @@ _PROCESS_IMAP_MESSAGE_SCHEMA = vol.Schema(
         vol.Optional("booklet", default=False): cv.boolean,
         vol.Optional("attachment_filter"): cv.string,
         vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
+        vol.Optional("collate"): cv.boolean,
         vol.Optional("orientation"): vol.In(("portrait", "landscape")),
         vol.Optional("media"): cv.string,
         vol.Optional("raster_dpi"): vol.All(
             vol.Coerce(int), vol.Range(min=72, max=600)
         ),
         vol.Optional("reverse_order"): cv.boolean,
+        vol.Optional("mail_config_allowed"): cv.boolean,
         vol.Optional("sender"): cv.string,
         vol.Optional("mail_subject"): cv.string,
         vol.Optional("mail_text"): cv.string,
@@ -281,6 +286,7 @@ def _register_services(hass: HomeAssistant) -> None:
         duplex: str | None = call.data.get(FIELD_DUPLEX)
         booklet: bool = call.data.get(FIELD_BOOKLET, False)
         copies: int | None = call.data.get("copies")
+        collate: bool | None = call.data.get("collate")
         orientation: str | None = call.data.get("orientation")
         media: str | None = call.data.get("media")
         raster_dpi: int | None = call.data.get("raster_dpi")
@@ -292,6 +298,7 @@ def _register_services(hass: HomeAssistant) -> None:
             duplex,
             booklet,
             copies=copies,
+            collate=collate,
             orientation=orientation,
             media=media,
             raster_dpi=raster_dpi,
@@ -319,10 +326,12 @@ def _register_services(hass: HomeAssistant) -> None:
             booklet_override=call.data.get("booklet", False) or None,
             attachment_filter=call.data.get("attachment_filter"),
             copies=call.data.get("copies"),
+            collate=call.data.get("collate"),
             orientation=call.data.get("orientation"),
             media=call.data.get("media"),
             raster_dpi=call.data.get("raster_dpi"),
             reverse_order=call.data.get("reverse_order"),
+            mail_config_allowed=call.data.get("mail_config_allowed"),
             sender=call.data.get("sender"),
             mail_subject=call.data.get("mail_subject"),
             mail_text=call.data.get("mail_text"),
@@ -336,8 +345,10 @@ def _register_services(hass: HomeAssistant) -> None:
             "success": result.success,
             "status_code": result.status_code,
             "status": result.status,
+            "copies": result.copies,
             "reverse_order": result.reverse_order,
             "reverse_order_applied": result.reverse_order_applied,
+            "collate": result.collate,
             "status_reply": {
                 "recipient": result.status_reply_recipient,
                 "subject": result.status_reply_subject,
@@ -357,10 +368,12 @@ def _register_services(hass: HomeAssistant) -> None:
             booklet_override=call.data.get("booklet", False) or None,
             attachment_filter=call.data.get("attachment_filter"),
             copies=call.data.get("copies"),
+            collate=call.data.get("collate"),
             orientation=call.data.get("orientation"),
             media=call.data.get("media"),
             raster_dpi=call.data.get("raster_dpi"),
             reverse_order=call.data.get("reverse_order"),
+            mail_config_allowed=call.data.get("mail_config_allowed"),
             sender=call.data.get("sender"),
             mail_subject=call.data.get("mail_subject"),
             mail_text=call.data.get("mail_text"),
@@ -377,8 +390,10 @@ def _register_services(hass: HomeAssistant) -> None:
             "attachments": list(result.attachments),
             "skipped_attachments": list(result.skipped_attachments),
             "merged_attachment_count": result.merged_attachment_count,
+            "copies": result.copies,
             "reverse_order": result.reverse_order,
             "reverse_order_applied": result.reverse_order_applied,
+            "collate": result.collate,
             "status_reply": {
                 "recipient": result.status_reply_recipient,
                 "subject": result.status_reply_subject,
@@ -451,6 +466,7 @@ def _register_services(hass: HomeAssistant) -> None:
         imap_uid: str | None = call.data.get("uid")
         duplex: str | None = call.data.get("duplex")
         booklet: bool | None = call.data.get("booklet")
+        collate: bool | None = call.data.get("collate")
         reverse_order: bool | None = call.data.get("reverse_order")
 
         if job_index is not None:
@@ -482,6 +498,7 @@ def _register_services(hass: HomeAssistant) -> None:
             job,
             duplex_override=duplex,
             booklet_override=booklet,
+            collate_override=collate,
             reverse_order_override=reverse_order,
         )
         return {
@@ -489,8 +506,10 @@ def _register_services(hass: HomeAssistant) -> None:
             "success": result.success,
             "error": result.error,
             "timestamp": result.timestamp,
+            "copies": result.copies,
             "reverse_order": result.reverse_order,
             "reverse_order_applied": result.reverse_order_applied,
+            "collate": result.collate,
             "status_reply": {
                 "recipient": result.status_reply_recipient,
                 "subject": result.status_reply_subject,
@@ -509,6 +528,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("uid"): cv.string,
                 vol.Optional("duplex"): vol.In(DUPLEX_MODES),
                 vol.Optional("booklet"): cv.boolean,
+                vol.Optional("collate"): cv.boolean,
                 vol.Optional("reverse_order"): cv.boolean,
             }
         ),
@@ -527,6 +547,7 @@ def _register_services(hass: HomeAssistant) -> None:
         booklet: bool = call.data.get("booklet", False)
         attachment_filter: str | None = call.data.get("attachment_filter")
         copies: int | None = call.data.get("copies")
+        collate: bool | None = call.data.get("collate")
         orientation: str | None = call.data.get("orientation")
         media: str | None = call.data.get("media")
         raster_dpi: int | None = call.data.get("raster_dpi")
@@ -541,6 +562,7 @@ def _register_services(hass: HomeAssistant) -> None:
             booklet=booklet,
             attachment_filter=attachment_filter,
             copies=copies,
+            collate=collate,
             orientation=orientation,
             media=media,
             raster_dpi=raster_dpi,
@@ -559,6 +581,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("booklet", default=False): cv.boolean,
                 vol.Optional("attachment_filter"): cv.string,
                 vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
+                vol.Optional("collate"): cv.boolean,
                 vol.Optional("orientation"): vol.In(("portrait", "landscape")),
                 vol.Optional("media"): cv.string,
                 vol.Optional("raster_dpi"): vol.All(

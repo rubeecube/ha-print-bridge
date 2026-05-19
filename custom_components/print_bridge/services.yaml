@@ -67,6 +67,13 @@ print_email:
           min: 1
           max: 20
           mode: box
+    collate:
+      name: Collate Copies
+      description: Request collated output for multi-copy jobs.
+      required: false
+      default: true
+      selector:
+        boolean:
     orientation:
       name: Orientation
       description: Request portrait or landscape output. Booklet jobs always request landscape.
@@ -150,6 +157,13 @@ print_file:
           min: 1
           max: 20
           mode: box
+    collate:
+      name: Collate Copies
+      description: Request collated output for multi-copy jobs.
+      required: false
+      default: true
+      selector:
+        boolean:
     orientation:
       name: Orientation
       description: Request portrait or landscape output. Booklet jobs always request landscape.
@@ -343,6 +357,13 @@ process_imap_part:
           min: 1
           max: 20
           mode: box
+    collate:
+      name: Collate Copies
+      description: Request collated output for multi-copy jobs.
+      required: false
+      default: true
+      selector:
+        boolean:
     orientation:
       name: Orientation
       description: Request portrait or landscape output. Booklet jobs always request landscape.
@@ -389,6 +410,14 @@ process_imap_part:
       required: false
       selector:
         text:
+    mail_config_allowed:
+      name: Allow Mail Configuration
+      description: >-
+        Set true only after sender filtering has accepted this sender. When false,
+        Print-Bridge parameters in the mail body are ignored.
+      required: false
+      selector:
+        boolean:
 
 process_imap_message:
   name: Process IMAP Email Message
@@ -462,6 +491,13 @@ process_imap_message:
           min: 1
           max: 20
           mode: box
+    collate:
+      name: Collate Copies
+      description: Request collated output for multi-copy jobs.
+      required: false
+      default: true
+      selector:
+        boolean:
     orientation:
       name: Orientation
       description: Request portrait or landscape output. Booklet jobs are imposed in landscape.
@@ -508,3 +544,11 @@ process_imap_message:
       required: false
       selector:
         text:
+    mail_config_allowed:
+      name: Allow Mail Configuration
+      description: >-
+        Set true only after sender filtering has accepted this sender. When false,
+        Print-Bridge parameters in the mail body are ignored.
+      required: false
+      selector:
+        boolean:

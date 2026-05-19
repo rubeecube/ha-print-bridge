@@ -269,10 +269,12 @@ async def test_pdf_event_triggers_fetch_and_print(hass: HomeAssistant) -> None:
         duplex_override=None,
         booklet_override=None,
         copies=None,
+        collate=None,
         orientation=None,
         media=None,
         raster_dpi=None,
         reverse_order=None,
+        mail_config_allowed=True,
         mail_subject="",
         mail_text="",
     )
@@ -322,7 +324,7 @@ async def test_mail_params_override_imap_event_print_settings(
         await coordinator.async_handle_imap_event(
             _event(
                 parts=_pdf_parts("Au Puits booklet.pdf"),
-                subject="[pb duplex=short-edge copies=2 dpi=150]",
+                subject="[pb duplex=short-edge copies=2 collate=false dpi=150]",
                 text="Print-Bridge: booklet=true; paper=a4; orientation=landscape",
             )
         )
@@ -337,13 +339,50 @@ async def test_mail_params_override_imap_event_print_settings(
         "duplex_override": "two-sided-short-edge",
         "booklet_override": True,
         "copies": 2,
+        "collate": False,
         "orientation": "landscape",
         "media": "iso_a4_210x297mm",
         "raster_dpi": 150,
         "reverse_order": None,
-        "mail_subject": "[pb duplex=short-edge copies=2 dpi=150]",
+        "mail_config_allowed": True,
+        "mail_subject": "[pb duplex=short-edge copies=2 collate=false dpi=150]",
         "mail_text": "Print-Bridge: booklet=true; paper=a4; orientation=landscape",
     }
+
+
+async def test_mail_config_request_without_attachments_requires_allowed_sender(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(
+        hass, options={**MOCK_OPTIONS, "allowed_senders": ["sender@example.com"]}
+    )
+
+    with patch.object(
+        coordinator,
+        "async_process_imap_message",
+        new=AsyncMock(return_value=PrintJobResult(filename="config", success=True)),
+    ) as mock_process:
+        await coordinator.async_handle_imap_event(_event(subject="[pb config]"))
+
+    mock_process.assert_awaited_once()
+    assert mock_process.call_args.kwargs["mail_config_allowed"] is True
+
+
+async def test_mail_config_request_is_ignored_when_allowed_senders_empty(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(
+        hass, options={**MOCK_OPTIONS, "allowed_senders": []}
+    )
+
+    with patch.object(
+        coordinator,
+        "async_process_imap_message",
+        new=AsyncMock(),
+    ) as mock_process:
+        await coordinator.async_handle_imap_event(_event(subject="[pb config]"))
+
+    mock_process.assert_not_awaited()
 
 
 async def test_mail_attachment_filter_skips_non_matching_pdfs(
@@ -1020,6 +1059,63 @@ async def test_process_imap_message_ignores_filter_only_skips(
     mock_reply.assert_not_awaited()
 
 
+async def test_process_imap_message_sends_config_reply_without_attachments(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+
+    with (
+        patch.object(
+            coordinator,
+            "_async_send_reply_message",
+            new=AsyncMock(),
+        ) as mock_reply,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        result = await coordinator.async_process_imap_message(
+            entry_id="imap_entry_1",
+            uid="99",
+            parts={"0": {"content_type": "text/plain"}},
+            sender="sender@example.com",
+            mail_subject="[pb config]",
+            mail_text="",
+            mail_config_allowed=True,
+        )
+
+    assert result.success is True
+    assert result.status_code == "config-sent"
+    mock_reply.assert_awaited_once()
+    assert "nb_copies=1" in mock_reply.call_args.kwargs["message"]
+    assert "collate=true" in mock_reply.call_args.kwargs["message"]
+
+
+async def test_invalid_mail_parameter_fails_before_printing(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+
+    with (
+        patch.object(coordinator, "async_send_print_job", new=AsyncMock()) as mock_send,
+        patch.object(coordinator, "_async_send_status_reply", new=AsyncMock()) as mock_reply,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        result = await coordinator.async_process_imap_message(
+            entry_id="imap_entry_1",
+            uid="99",
+            parts=_pdf_parts(),
+            sender="sender@example.com",
+            mail_subject="Bad params",
+            mail_text="Print-Bridge: collate=banana",
+            mail_config_allowed=True,
+        )
+
+    assert result.success is False
+    assert result.status_code == "invalid-mail-parameters"
+    assert "Invalid collate value" in str(result.error)
+    mock_send.assert_not_awaited()
+    mock_reply.assert_awaited_once()
+
+
 async def test_process_imap_message_reports_skipped_unsupported_attachments(
     hass: HomeAssistant,
 ) -> None:
@@ -1138,6 +1234,7 @@ async def test_retry_job_refetches_and_prints(hass: HomeAssistant) -> None:
         booklet_override=False,
         sender="sender@example.com",
         copies=None,
+        collate=None,
         orientation=None,
         media=None,
         raster_dpi=None,
@@ -1198,6 +1295,35 @@ async def test_send_print_job_posts_to_ipp_endpoint(hass: HomeAssistant) -> None
     assert result.success is True
     post_url = mock_session.post.call_args.args[0]
     assert post_url == "http://cups.local:631/printers/TestPrinter"
+
+
+async def test_send_print_job_sends_uncollated_copy_request(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    mock_resp.read = AsyncMock(return_value=_ipp_response())
+
+    mock_session = MagicMock()
+    mock_session.post.return_value = mock_resp
+
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        result = await coordinator.async_send_print_job(
+            "doc.pdf", _FAKE_PDF, "one-sided", False, copies=2, collate=False
+        )
+
+    packet = mock_session.post.call_args.kwargs["data"]
+    assert b"multiple-document-handling" in packet
+    assert b"separate-documents-uncollated-copies" in packet
+    assert result.copies == 2
+    assert result.collate is False
 
 
 async def test_send_print_job_reverses_one_sided_pdf_by_default(
@@ -1407,6 +1533,7 @@ async def test_printer_busy_queue_waits_until_ready_then_resends(
         "one-sided",
         False,
         copies=None,
+        collate=None,
         orientation=None,
         media=None,
         raster_dpi=None,

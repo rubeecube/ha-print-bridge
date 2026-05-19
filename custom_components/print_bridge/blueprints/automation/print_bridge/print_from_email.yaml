@@ -115,10 +115,26 @@ variables:
 
   _sender: "{{ trigger.event.data.sender | lower }}"
   _subject: "{{ trigger.event.data.subject | lower }}"
+  _mail_text: "{{ trigger.event.data.text | default('') | lower }}"
   _uid: "{{ trigger.event.data.uid | string }}"
   _parts: "{{ trigger.event.data.parts }}"
 
   _effective_duplex: "{{ 'two-sided-short-edge' if booklet else duplex }}"
+  _mail_config_allowed: >
+    {{ allowed_sender | trim != ''
+       and allowed_sender | lower | trim in _sender }}
+  _mail_config_requested: >
+    {{ _mail_config_allowed
+       and (
+         '[pb config' in _subject
+         or '[print-bridge config' in _subject
+         or 'pb: config' in _mail_text
+         or 'print-bridge: config' in _mail_text
+         or 'command=config' in _subject
+         or 'command=config' in _mail_text
+         or 'config=true' in _subject
+         or 'config=true' in _mail_text
+       ) }}
 
 # ── Conditions ──────────────────────────────────────────────────────────────
 
@@ -186,7 +202,7 @@ condition:
           {% endif %}
         {% endif %}
       {% endfor %}
-      {{ ns.has_printable }}
+      {{ ns.has_printable or _mail_config_requested }}
 
 # ── Actions ─────────────────────────────────────────────────────────────────
 
@@ -203,6 +219,7 @@ action:
       sender: "{{ trigger.event.data.sender }}"
       mail_subject: "{{ trigger.event.data.subject }}"
       mail_text: "{{ trigger.event.data.text | default('') }}"
+      mail_config_allowed: "{{ _mail_config_allowed }}"
     response_variable: print_bridge_result
 
   - alias: "Mark email as seen (optional)"

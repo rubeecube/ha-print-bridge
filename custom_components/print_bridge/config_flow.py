@@ -27,6 +27,7 @@ from .const import (
     CONF_ALLOWED_SENDERS,
     CONF_AUTO_DELETE,
     CONF_BOOKLET_PATTERNS,
+    CONF_COLLATE,
     CONF_CUPS_URL,
     CONF_DIRECT_PRINTER_URL,
     CONF_DUPLEX_MODE,
@@ -48,6 +49,7 @@ from .const import (
     CONF_STATUS_REPLY_ENABLED,
     CONF_STATUS_REPLY_NOTIFY_SERVICE,
     DEFAULT_AUTO_DELETE,
+    DEFAULT_COLLATE,
     DEFAULT_CUPS_URL,
     DEFAULT_DUPLEX_MODE,
     DEFAULT_EMAIL_ACTION,
@@ -664,6 +666,10 @@ class AutoPrintOptionsFlow(OptionsFlow):
             vol.Required(
                 CONF_REVERSE_ORDER,
                 default=options.get(CONF_REVERSE_ORDER, DEFAULT_REVERSE_ORDER),
+            ): bool,
+            vol.Required(
+                CONF_COLLATE,
+                default=options.get(CONF_COLLATE, DEFAULT_COLLATE),
             ): bool,
             vol.Required(
                 CONF_EMAIL_ACTION,

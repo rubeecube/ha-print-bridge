@@ -21,7 +21,7 @@ import os
 import re
 import smtplib
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from email.utils import parseaddr
 from functools import partial
@@ -50,6 +50,7 @@ from .const import (
     CONF_ALLOWED_SENDERS,
     CONF_AUTO_DELETE,
     CONF_BOOKLET_PATTERNS,
+    CONF_COLLATE,
     CONF_CUPS_URL,
     CONF_DIRECT_PRINTER_URL,
     CONF_DUPLEX_MODE,
@@ -73,6 +74,7 @@ from .const import (
     CONF_STATUS_REPLY_ENABLED,
     CONF_STATUS_REPLY_NOTIFY_SERVICE,
     DEFAULT_AUTO_DELETE,
+    DEFAULT_COLLATE,
     DEFAULT_DUPLEX_MODE,
     DEFAULT_EMAIL_ACTION,
     DEFAULT_EMAIL_ARCHIVE_FOLDER,
@@ -387,6 +389,7 @@ class PrintJobResult:
     duplex: str | None = None
     booklet: bool = False
     copies: int | None = None
+    collate: bool | None = None
     orientation: str | None = None
     media: str | None = None
     raster_dpi: int | None = None
@@ -499,6 +502,7 @@ class PendingJob:
     duplex_override: str | None = None
     booklet_override: bool | None = None
     copies: int | None = None
+    collate: bool | None = None
     orientation: str | None = None
     media: str | None = None
     raster_dpi: int | None = None
@@ -521,6 +525,7 @@ class PendingJob:
             "duplex": self.duplex_override,
             "booklet": self.booklet_override,
             "copies": self.copies,
+            "collate": self.collate,
             "orientation": self.orientation,
             "media": self.media,
             "raster_dpi": self.raster_dpi,
@@ -538,6 +543,7 @@ class BusyPrintJob:
     duplex_mode: str
     booklet: bool
     copies: int | None = None
+    collate: bool | None = None
     orientation: str | None = None
     media: str | None = None
     raster_dpi: int | None = None
@@ -555,6 +561,7 @@ class BusyPrintJob:
             "duplex": self.duplex_mode,
             "booklet": self.booklet,
             "copies": self.copies,
+            "collate": self.collate,
             "orientation": self.orientation,
             "media": self.media,
             "raster_dpi": self.raster_dpi,
@@ -689,6 +696,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return self._reverse_order if reverse_order is None else bool(reverse_order)
 
     @property
+    def _collate(self) -> bool:
+        """True when multi-copy jobs should be collated by default."""
+        return bool(self._entry.options.get(CONF_COLLATE, DEFAULT_COLLATE))
+
+    def _resolve_collate(self, collate: bool | None) -> bool:
+        return self._collate if collate is None else bool(collate)
+
+    @property
     def _allowed_senders(self) -> list[str]:
         senders: list[str] = []
         for sender in self._entry.options.get(CONF_ALLOWED_SENDERS, []):
@@ -696,6 +711,36 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             if normalised:
                 senders.append(normalised)
         return senders
+
+    def _sender_can_use_mail_config(self, sender: str | None) -> bool:
+        """Return True only for explicitly configured allowed senders."""
+        normalised = _normalise_email_address(sender or "")
+        allowed = self._allowed_senders
+        return bool(normalised and allowed and normalised in allowed)
+
+    def _mail_params_for_sender(
+        self,
+        subject: str,
+        body: str,
+        sender: str | None,
+        mail_config_allowed: bool | None = None,
+    ) -> MailPrintParameters:
+        """Parse per-mail parameters only when the sender is explicitly trusted."""
+        params = parse_mail_print_parameters(subject, body)
+        allowed = (
+            bool(mail_config_allowed)
+            if mail_config_allowed is not None
+            else self._sender_can_use_mail_config(sender)
+        )
+        if allowed:
+            return params
+        if params.has_values or params.config_request or params.errors:
+            logger.info(
+                "Ignoring Print Bridge mail parameters from %s because the sender "
+                "is not listed in Allowed Senders",
+                sender or "unknown sender",
+            )
+        return MailPrintParameters()
 
     @property
     def _folder_filter(self) -> list[str]:
@@ -911,9 +956,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         entry_id: str = event.data.get("entry_id", "")
         uid: str = str(event.data.get("uid", ""))
         subject: str = str(event.data.get("subject", ""))
-        mail_params = parse_mail_print_parameters(
+        mail_config_allowed = self._sender_can_use_mail_config(sender)
+        mail_params = self._mail_params_for_sender(
             subject,
             str(event.data.get("text", "")),
+            sender,
+            mail_config_allowed,
         )
 
         printable_parts = {
@@ -922,7 +970,26 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             if _is_printable_part(str(part_key), part_info)
         }
         if not printable_parts:
-            if parts:
+            if mail_params.config_request or mail_params.errors:
+                await self.async_process_imap_message(
+                    entry_id=entry_id,
+                    uid=uid,
+                    parts=parts,
+                    sender=sender,
+                    attachment_filter=mail_params.attachment_filter,
+                    duplex_override=mail_params.duplex,
+                    booklet_override=mail_params.booklet,
+                    copies=mail_params.copies,
+                    collate=mail_params.collate,
+                    orientation=mail_params.orientation,
+                    media=mail_params.media,
+                    raster_dpi=mail_params.raster_dpi,
+                    reverse_order=mail_params.reverse_order,
+                    mail_subject=subject,
+                    mail_text=str(event.data.get("text", "")),
+                    mail_config_allowed=mail_config_allowed,
+                )
+            elif parts:
                 await self.async_request_refresh()
             return
 
@@ -940,6 +1007,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 duplex_override=mail_params.duplex,
                 booklet_override=mail_params.booklet,
                 copies=mail_params.copies,
+                collate=mail_params.collate,
                 orientation=mail_params.orientation,
                 media=mail_params.media,
                 raster_dpi=mail_params.raster_dpi,
@@ -985,10 +1053,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             duplex_override=mail_params.duplex,
             booklet_override=mail_params.booklet,
             copies=mail_params.copies,
+            collate=mail_params.collate,
             orientation=mail_params.orientation,
             media=mail_params.media,
             raster_dpi=mail_params.raster_dpi,
             reverse_order=mail_params.reverse_order,
+            mail_config_allowed=mail_config_allowed,
             mail_subject=subject,
             mail_text=str(event.data.get("text", "")),
         )
@@ -1007,6 +1077,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         booklet_override: bool | None = None,
         sender: str | None = None,
         copies: int | None = None,
+        collate: bool | None = None,
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
@@ -1033,6 +1104,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return PrintJobResult(
                 filename=filename, success=False, error=str(exc),
                 sender=sender,
+                collate=self._resolve_collate(collate),
                 raster_dpi=raster_dpi,
                 reverse_order=self._resolve_reverse_order(reverse_order),
                 imap_entry_id=entry_id, imap_uid=uid, imap_part_key=part_key,
@@ -1046,6 +1118,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return PrintJobResult(
                 filename=filename, success=False, error=str(exc),
                 sender=sender,
+                collate=self._resolve_collate(collate),
                 raster_dpi=raster_dpi,
                 reverse_order=self._resolve_reverse_order(reverse_order),
                 imap_entry_id=entry_id, imap_uid=uid, imap_part_key=part_key,
@@ -1064,6 +1137,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return PrintJobResult(
                 filename=filename, success=False, error=error,
                 sender=sender,
+                collate=self._resolve_collate(collate),
                 raster_dpi=raster_dpi,
                 reverse_order=self._resolve_reverse_order(reverse_order),
                 source_format=(
@@ -1087,6 +1161,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             effective_duplex,
             effective_booklet,
             copies=copies,
+            collate=collate,
             orientation=orientation,
             media=media,
             raster_dpi=raster_dpi,
@@ -1112,6 +1187,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         job: PrintJobResult,
         duplex_override: str | None = None,
         booklet_override: bool | None = None,
+        collate_override: bool | None = None,
         reverse_order_override: bool | None = None,
     ) -> PrintJobResult:
         """Re-fetch and reprint a previously recorded job.
@@ -1138,6 +1214,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 booklet_override=booklet_override if booklet_override is not None else job.booklet,
                 sender=job.sender,
                 copies=job.copies,
+                collate=(
+                    collate_override
+                    if collate_override is not None
+                    else job.collate
+                ),
                 orientation=job.orientation,
                 media=job.media,
                 raster_dpi=job.raster_dpi,
@@ -1157,6 +1238,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             booklet_override=booklet_override if booklet_override is not None else job.booklet,
             sender=job.sender,
             copies=job.copies,
+            collate=(
+                collate_override
+                if collate_override is not None
+                else job.collate
+            ),
             orientation=job.orientation,
             media=job.media,
             raster_dpi=job.raster_dpi,
@@ -1282,8 +1368,43 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return
         if not (self._status_reply_enabled or params.reply is True):
             return
+        await self._async_send_reply_message(
+            imap_entry_id=imap_entry_id,
+            sender=sender,
+            title=f"Re: {subject or 'Print Bridge status'}",
+            message=self._format_status_reply(results, params),
+            results=results,
+        )
+
+    async def _async_send_config_reply(
+        self,
+        *,
+        imap_entry_id: str | None,
+        sender: str | None,
+        subject: str,
+        result: PrintJobResult,
+    ) -> None:
+        """Send the mail-parameter template to an allowed sender."""
+        await self._async_send_reply_message(
+            imap_entry_id=imap_entry_id,
+            sender=sender,
+            title=f"Re: {subject or 'Print Bridge configuration'}",
+            message=self._format_config_reply(),
+            results=[result],
+        )
+
+    async def _async_send_reply_message(
+        self,
+        *,
+        imap_entry_id: str | None,
+        sender: str | None,
+        title: str,
+        message: str,
+        results: list[PrintJobResult],
+    ) -> None:
+        """Deliver a plain-text email reply and store delivery metadata."""
         if not sender:
-            logger.warning("Cannot send print status reply: sender address is empty")
+            logger.warning("Cannot send print reply: sender address is empty")
             for result in results:
                 result.status_reply_delivery = "not_sent: sender address is empty"
             await self._async_notify_status_reply_issue(
@@ -1291,8 +1412,6 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             )
             return
 
-        title = f"Re: {subject or 'Print Bridge status'}"
-        message = self._format_status_reply(results, params)
         for result in results:
             result.status_reply_recipient = sender
             result.status_reply_subject = title
@@ -1449,6 +1568,32 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             "text": str(fetched.get("text", "")),
         }
 
+    def _parameter_error_result(
+        self,
+        filename: str,
+        sender: str | None,
+        params: MailPrintParameters,
+    ) -> PrintJobResult:
+        """Build a failed result for invalid per-mail print parameters."""
+        error = "; ".join(params.errors) or "Invalid print parameters"
+        return PrintJobResult(
+            filename=sanitize_ipp_job_name(filename),
+            success=False,
+            error=error,
+            sender=sender,
+            duplex=params.duplex or self._duplex_mode,
+            booklet=bool(params.booklet),
+            copies=params.copies or 1,
+            collate=self._resolve_collate(params.collate),
+            orientation=params.orientation,
+            media=params.media,
+            raster_dpi=params.raster_dpi or self._raster_dpi,
+            reverse_order=self._resolve_reverse_order(params.reverse_order),
+            merged_attachment_count=0,
+            status_code="invalid-mail-parameters",
+            status=error,
+        )
+
     def _format_status_reply(
         self, results: list[PrintJobResult], params: MailPrintParameters
     ) -> str:
@@ -1467,6 +1612,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     f"{key}={value}" for key, value in params.as_dict().items()
                 )
             )
+        if params.errors:
+            lines.append("Mail parameter errors:")
+            lines.extend(f"- {error}" for error in params.errors)
         lines.append("")
 
         for index, result in enumerate(results, start=1):
@@ -1490,6 +1638,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     f"Reverse order: {'yes' if result.reverse_order else 'no'}",
                     f"Reverse applied: {'yes' if result.reverse_order_applied else 'no'}",
                     f"Copies: {result.copies or 1}",
+                    f"Collate: {'yes' if result.collate else 'no'}",
                     f"Orientation: {result.orientation or 'default'}",
                     f"Media: {result.media or 'default'}",
                     f"Raster DPI: {result.raster_dpi or 'n/a'}",
@@ -1507,6 +1656,36 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 lines.append("")
         return "\n".join(lines).strip()
 
+    def _format_config_reply(self) -> str:
+        """Build the mail-parameter template sent for configuration requests."""
+        return "\n".join(
+            [
+                "Print Bridge configuration",
+                "",
+                "Reply to this email, keep the Print-Bridge line below, adjust values, and attach files.",
+                "",
+                (
+                    "Print-Bridge: "
+                    f"duplex={self._duplex_mode}; "
+                    "booklet=false; "
+                    "nb_copies=1; "
+                    f"collate={'true' if self._collate else 'false'}; "
+                    f"dpi={self._raster_dpi}; "
+                    f"reverse_order={'true' if self._reverse_order else 'false'}; "
+                    "reply=true"
+                ),
+                "",
+                "Optional parameters:",
+                "- attachment_filter=\"text in filename\"",
+                "- orientation=portrait|landscape",
+                "- media=iso_a4_210x297mm|na_letter_8.5x11in|na_legal_8.5x14in",
+                "- order=reverse|normal",
+                "",
+                "Accepted boolean values: true/false, yes/no, on/off, 1/0.",
+                "Invalid values make the job fail with a status reply instead of printing.",
+            ]
+        )
+
     async def async_process_imap_part(
         self,
         entry_id: str,
@@ -1518,10 +1697,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         sender: str | None = None,
         attachment_filter: str | None = None,
         copies: int | None = None,
+        collate: bool | None = None,
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
         reverse_order: bool | None = None,
+        mail_config_allowed: bool | None = None,
         mail_subject: str | None = None,
         mail_text: str | None = None,
     ) -> PrintJobResult:
@@ -1538,13 +1719,37 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 mail_text if mail_text is not None else context.get("text", "")
             )
 
-        mail_params = parse_mail_print_parameters(mail_subject or "", mail_text or "")
+        mail_params = self._mail_params_for_sender(
+            mail_subject or "",
+            mail_text or "",
+            sender,
+            mail_config_allowed,
+        )
+        if mail_params.errors:
+            result = self._parameter_error_result(
+                filename or f"attachment_{part_key}.pdf",
+                sender,
+                mail_params,
+            )
+            await self._async_send_status_reply(
+                imap_entry_id=entry_id,
+                sender=sender,
+                subject=mail_subject or "",
+                results=[result],
+                params=replace(mail_params, reply=True),
+            )
+            self._record_job(result)
+            await self.async_request_refresh()
+            return result
         effective_duplex_override = mail_params.duplex or duplex_override
         effective_booklet_override = (
             mail_params.booklet if mail_params.booklet is not None else booklet_override
         )
         effective_attachment_filter = mail_params.attachment_filter or attachment_filter
         effective_copies = mail_params.copies or copies
+        effective_collate = (
+            mail_params.collate if mail_params.collate is not None else collate
+        )
         effective_orientation = mail_params.orientation or orientation
         effective_media = mail_params.media or media
         effective_raster_dpi = mail_params.raster_dpi or raster_dpi
@@ -1603,6 +1808,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             booklet_override=effective_booklet_override,
             sender=sender,
             copies=effective_copies,
+            collate=effective_collate,
             orientation=effective_orientation,
             media=effective_media,
             raster_dpi=effective_raster_dpi,
@@ -1629,10 +1835,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         sender: str | None = None,
         attachment_filter: str | None = None,
         copies: int | None = None,
+        collate: bool | None = None,
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
         reverse_order: bool | None = None,
+        mail_config_allowed: bool | None = None,
         mail_subject: str | None = None,
         mail_text: str | None = None,
     ) -> PrintJobResult:
@@ -1654,6 +1862,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     success=False,
                     error=f"Failed to fetch email uid={uid}: {exc}",
                     sender=sender,
+                    collate=self._resolve_collate(collate),
                     reverse_order=self._resolve_reverse_order(reverse_order),
                     imap_entry_id=entry_id,
                     imap_uid=uid,
@@ -1668,10 +1877,69 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             mail_subject = mail_subject if mail_subject is not None else str(fetched.get("subject", ""))
             mail_text = mail_text if mail_text is not None else str(fetched.get("text", ""))
 
-        mail_params = parse_mail_print_parameters(mail_subject or "", mail_text or "")
+        mail_params = self._mail_params_for_sender(
+            mail_subject or "",
+            mail_text or "",
+            sender,
+            mail_config_allowed,
+        )
+        if mail_params.errors:
+            result = self._parameter_error_result(
+                mail_subject or f"email_{uid}_attachments.pdf",
+                sender,
+                mail_params,
+            )
+            result.imap_entry_id = entry_id
+            result.imap_uid = uid
+            result.imap_part_key = "message"
+            await self._async_send_status_reply(
+                imap_entry_id=entry_id,
+                sender=sender,
+                subject=mail_subject or "",
+                results=[result],
+                params=replace(mail_params, reply=True),
+            )
+            self._record_job(result)
+            await self.async_request_refresh()
+            return result
+
+        if mail_params.config_request and not any(
+            _is_printable_part(str(part_key), part_info)
+            for part_key, part_info in (parts or {}).items()
+        ):
+            result = PrintJobResult(
+                filename="print-bridge-config.txt",
+                success=True,
+                sender=sender,
+                duplex=self._duplex_mode,
+                booklet=False,
+                copies=1,
+                collate=self._collate,
+                raster_dpi=self._raster_dpi,
+                reverse_order=self._reverse_order,
+                merged_attachment_count=0,
+                status_code="config-sent",
+                status="configuration parameters sent",
+                imap_entry_id=entry_id,
+                imap_uid=uid,
+                imap_part_key="message",
+            )
+            await self._async_send_config_reply(
+                imap_entry_id=entry_id,
+                sender=sender,
+                subject=mail_subject or "",
+                result=result,
+            )
+            self._record_job(result)
+            await self.async_request_refresh()
+            return result
+
         effective_duplex = mail_params.duplex or duplex_override or self._duplex_mode
         effective_attachment_filter = mail_params.attachment_filter or attachment_filter
         effective_copies = mail_params.copies or copies
+        effective_collate = (
+            mail_params.collate if mail_params.collate is not None else collate
+        )
         effective_orientation = mail_params.orientation or orientation
         effective_media = mail_params.media or media
         effective_raster_dpi = mail_params.raster_dpi or raster_dpi
@@ -1709,6 +1977,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         else booklet_override
                     ),
                     copies=effective_copies or 1,
+                    collate=self._resolve_collate(effective_collate),
                     orientation=effective_orientation,
                     media=effective_media,
                     raster_dpi=effective_raster_dpi,
@@ -1739,6 +2008,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     else booklet_override
                 )),
                 copies=effective_copies or 1,
+                collate=self._resolve_collate(effective_collate),
                 orientation=effective_orientation,
                 media=effective_media,
                 raster_dpi=effective_raster_dpi,
@@ -1781,6 +2051,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             effective_duplex,
             bool(effective_booklet),
             copies=effective_copies,
+            collate=effective_collate,
             orientation=effective_orientation,
             media=effective_media,
             raster_dpi=effective_raster_dpi,
@@ -1947,6 +2218,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         duplex_mode: str | None = None,
         force_booklet: bool = False,
         copies: int | None = None,
+        collate: bool | None = None,
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
@@ -1972,6 +2244,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename,
                 success=False,
                 error=f"Cannot read {file_path}",
+                collate=self._resolve_collate(collate),
                 reverse_order=self._resolve_reverse_order(reverse_order),
             )
             self._record_job(result)
@@ -1997,6 +2270,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     if printable_type(filename, None)
                     else None
                 ),
+                collate=self._resolve_collate(collate),
                 reverse_order=self._resolve_reverse_order(reverse_order),
                 skipped_attachments=[f"{filename}: {error}"],
             )
@@ -2011,6 +2285,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             effective_duplex,
             booklet,
             copies=copies,
+            collate=collate,
             orientation=orientation,
             media=media,
             raster_dpi=raster_dpi,
@@ -2033,6 +2308,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         booklet: bool = False,
         attachment_filter: str | None = None,
         copies: int | None = None,
+        collate: bool | None = None,
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
@@ -2086,6 +2362,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             sender=sender,
             attachment_filter=attachment_filter,
             copies=copies,
+            collate=collate,
             orientation=orientation,
             media=media,
             raster_dpi=raster_dpi,
@@ -2104,6 +2381,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     "error": result.error,
                     "attachments": list(result.attachments),
                     "skipped_attachments": list(result.skipped_attachments),
+                    "copies": result.copies,
+                    "collate": result.collate,
                     "reverse_order": result.reverse_order,
                     "reverse_order_applied": result.reverse_order_applied,
                     "status_reply": {
@@ -2407,6 +2686,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         duplex_mode: str,
         booklet: bool,
         copies: int | None = None,
+        collate: bool | None = None,
         orientation: str | None = None,
         media: str | None = None,
         raster_dpi: int | None = None,
@@ -2429,6 +2709,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             )
         )
         effective_copies = copies or 1
+        effective_collate = self._resolve_collate(collate)
         effective_media = media
         source_pdf_data = pdf_data
         effective_reverse_order = self._resolve_reverse_order(reverse_order)
@@ -2447,7 +2728,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 return PrintJobResult(
                     filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
-                    copies=effective_copies, orientation=effective_orientation,
+                    copies=effective_copies, collate=effective_collate,
+                    orientation=effective_orientation,
                     media=effective_media, raster_dpi=effective_raster_dpi,
                     reverse_order=effective_reverse_order,
                     reverse_order_applied=reverse_order_applied,
@@ -2471,6 +2753,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     duplex=duplex_mode,
                     booklet=booklet,
                     copies=effective_copies,
+                    collate=effective_collate,
                     orientation=effective_orientation,
                     media=effective_media,
                     raster_dpi=effective_raster_dpi,
@@ -2489,7 +2772,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return PrintJobResult(
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
-                copies=effective_copies, orientation=effective_orientation,
+                copies=effective_copies, collate=effective_collate,
+                orientation=effective_orientation,
                 media=effective_media, raster_dpi=effective_raster_dpi,
                 reverse_order=effective_reverse_order,
                 reverse_order_applied=reverse_order_applied,
@@ -2508,6 +2792,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             document_data,
             document_format=document_format,
             copies=copies,
+            collate=effective_collate if effective_copies > 1 else None,
             orientation_requested=(
                 None if booklet else orientation_requested
             ),
@@ -2534,7 +2819,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     return PrintJobResult(
                         filename=filename, success=False, error=error,
                         duplex=duplex_mode, booklet=booklet,
-                        copies=effective_copies, orientation=effective_orientation,
+                        copies=effective_copies, collate=effective_collate,
+                        orientation=effective_orientation,
                         media=effective_media, raster_dpi=reported_raster_dpi,
                         reverse_order=effective_reverse_order,
                         reverse_order_applied=reverse_order_applied,
@@ -2548,7 +2834,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     return PrintJobResult(
                         filename=filename, success=False, error=error,
                         duplex=duplex_mode, booklet=booklet,
-                        copies=effective_copies, orientation=effective_orientation,
+                        copies=effective_copies, collate=effective_collate,
+                        orientation=effective_orientation,
                         media=effective_media, raster_dpi=reported_raster_dpi,
                         reverse_order=effective_reverse_order,
                         reverse_order_applied=reverse_order_applied,
@@ -2569,7 +2856,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     return PrintJobResult(
                         filename=filename, success=True,
                         duplex=duplex_mode, booklet=booklet,
-                        copies=effective_copies, orientation=effective_orientation,
+                        copies=effective_copies, collate=effective_collate,
+                        orientation=effective_orientation,
                         media=effective_media, raster_dpi=reported_raster_dpi,
                         reverse_order=effective_reverse_order,
                         reverse_order_applied=reverse_order_applied,
@@ -2585,6 +2873,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         duplex_mode=duplex_mode,
                         booklet=booklet,
                         copies=copies,
+                        collate=collate,
                         orientation=orientation,
                         media=media,
                         raster_dpi=raster_dpi,
@@ -2604,6 +2893,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         duplex=duplex_mode,
                         booklet=booklet,
                         copies=effective_copies,
+                        collate=effective_collate,
                         orientation=effective_orientation,
                         media=effective_media,
                         raster_dpi=reported_raster_dpi,
@@ -2618,7 +2908,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 return PrintJobResult(
                     filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
-                    copies=effective_copies, orientation=effective_orientation,
+                    copies=effective_copies, collate=effective_collate,
+                    orientation=effective_orientation,
                     media=effective_media, raster_dpi=reported_raster_dpi,
                     reverse_order=effective_reverse_order,
                     reverse_order_applied=reverse_order_applied,
@@ -2646,6 +2937,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     duplex=duplex_mode,
                     booklet=booklet,
                     copies=effective_copies,
+                    collate=effective_collate,
                     orientation=effective_orientation,
                     media=effective_media,
                     raster_dpi=reported_raster_dpi,
@@ -2660,7 +2952,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return PrintJobResult(
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
-                copies=effective_copies, orientation=effective_orientation,
+                copies=effective_copies, collate=effective_collate,
+                orientation=effective_orientation,
                 media=effective_media, raster_dpi=reported_raster_dpi,
                 reverse_order=effective_reverse_order,
                 reverse_order_applied=reverse_order_applied,
@@ -2676,7 +2969,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return PrintJobResult(
                 filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
-                copies=effective_copies, orientation=effective_orientation,
+                copies=effective_copies, collate=effective_collate,
+                orientation=effective_orientation,
                 media=effective_media, raster_dpi=reported_raster_dpi,
                 reverse_order=effective_reverse_order,
                 reverse_order_applied=reverse_order_applied,
@@ -2745,6 +3039,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     job.duplex_mode,
                     job.booklet,
                     copies=job.copies,
+                    collate=job.collate,
                     orientation=job.orientation,
                     media=job.media,
                     raster_dpi=job.raster_dpi,
@@ -2871,6 +3166,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     booklet_override=job.booklet_override,
                     sender=job.sender,
                     copies=job.copies,
+                    collate=job.collate,
                     orientation=job.orientation,
                     media=job.media,
                     raster_dpi=job.raster_dpi,
@@ -2888,6 +3184,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     booklet_override=job.booklet_override,
                     sender=job.sender,
                     copies=job.copies,
+                    collate=job.collate,
                     orientation=job.orientation,
                     media=job.media,
                     raster_dpi=job.raster_dpi,
@@ -2992,6 +3289,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "duplex": result.duplex,
                 "booklet": result.booklet,
                 "copies": result.copies,
+                "collate": result.collate,
                 "orientation": result.orientation,
                 "media": result.media,
                 "raster_dpi": result.raster_dpi,
