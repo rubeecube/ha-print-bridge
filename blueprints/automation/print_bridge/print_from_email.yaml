@@ -59,6 +59,39 @@ blueprint:
       selector:
         text:
 
+    attachment_ignore_filter:
+      name: Ignore attachment names containing (optional)
+      description: >
+        Skip supported attachments whose filename contains this text
+        (case-insensitive). Separate multiple values with commas or semicolons.
+
+        Example: `draft, sample`
+      default: ""
+      selector:
+        text:
+
+    allowed_extensions:
+      name: Only print extensions (optional)
+      description: >
+        Only print supported attachments with these extensions. Separate values
+        with spaces, commas, or semicolons. Dots are optional.
+
+        Example: `pdf docx jpg`
+      default: ""
+      selector:
+        text:
+
+    ignored_extensions:
+      name: Ignore extensions (optional)
+      description: >
+        Skip supported attachments with these extensions. Separate values with
+        spaces, commas, or semicolons. Dots are optional.
+
+        Example: `png, tiff`
+      default: ""
+      selector:
+        text:
+
     # ── Print settings ────────────────────────────────────────────────────
 
     booklet:
@@ -109,16 +142,35 @@ variables:
   allowed_sender: !input allowed_sender
   subject_filter: !input subject_filter
   attachment_filter: !input attachment_filter
+  attachment_ignore_filter: !input attachment_ignore_filter
+  allowed_extensions: !input allowed_extensions
+  ignored_extensions: !input ignored_extensions
   booklet: !input booklet
   duplex: !input duplex
   mark_as_seen: !input mark_as_seen
 
   _sender: "{{ trigger.event.data.sender | lower }}"
   _subject: "{{ trigger.event.data.subject | lower }}"
+  _mail_text: "{{ trigger.event.data.text | default('') | lower }}"
   _uid: "{{ trigger.event.data.uid | string }}"
   _parts: "{{ trigger.event.data.parts }}"
 
   _effective_duplex: "{{ 'two-sided-short-edge' if booklet else duplex }}"
+  _mail_config_allowed: >
+    {{ allowed_sender | trim != ''
+       and allowed_sender | lower | trim in _sender }}
+  _mail_config_requested: >
+    {{ _mail_config_allowed
+       and (
+         '[pb config' in _subject
+         or '[print-bridge config' in _subject
+         or 'pb: config' in _mail_text
+         or 'print-bridge: config' in _mail_text
+         or 'command=config' in _subject
+         or 'command=config' in _mail_text
+         or 'config=true' in _subject
+         or 'config=true' in _mail_text
+       ) }}
 
 # ── Conditions ──────────────────────────────────────────────────────────────
 
@@ -168,21 +220,48 @@ condition:
         '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.webp',
         '.doc', '.ppt'
       ] %}
+      {% set allowed_ext_text = ' ' ~ (allowed_extensions | lower | replace(',', ' ') | replace(';', ' ') | replace('\n', ' ')) ~ ' ' %}
+      {% set ignored_ext_text = ' ' ~ (ignored_extensions | lower | replace(',', ' ') | replace(';', ' ') | replace('\n', ' ')) ~ ' ' %}
       {% set ns = namespace(has_printable=false) %}
       {% for part in _parts.values() %}
         {% set ctype = (part.content_type | string | lower).split(';')[0] | trim %}
         {% set filename = (part.filename or part.get('file_name', '') or '') | lower %}
-        {% if ctype in printable_mimes %}
-          {% set ns.has_printable = true %}
-        {% else %}
-          {% for ext in printable_exts %}
-            {% if filename.endswith(ext) %}
-              {% set ns.has_printable = true %}
-            {% endif %}
-          {% endfor %}
+        {% set filename_matches = attachment_filter | trim == ''
+           or attachment_filter | lower | trim in filename %}
+        {% set ignored_name = namespace(value=false) %}
+        {% for token in (attachment_ignore_filter | lower | replace(';', ',') | replace('\n', ',')).split(',') %}
+          {% if token | trim != '' and token | trim in filename %}
+            {% set ignored_name.value = true %}
+          {% endif %}
+        {% endfor %}
+        {% set ext_match = namespace(value='') %}
+        {% for ext in printable_exts %}
+          {% if filename.endswith(ext) %}
+            {% set ext_match.value = ext %}
+          {% endif %}
+        {% endfor %}
+        {% set bare_ext = ext_match.value[1:] if ext_match.value.startswith('.') else ext_match.value %}
+        {% set ext_ignored = ignored_ext_text | trim != ''
+           and ext_match.value != ''
+           and ((' ' ~ ext_match.value ~ ' ') in ignored_ext_text
+                or (' ' ~ bare_ext ~ ' ') in ignored_ext_text) %}
+        {% set ext_allowed = allowed_ext_text | trim == ''
+           or (ext_match.value != ''
+               and ((' ' ~ ext_match.value ~ ' ') in allowed_ext_text
+                    or (' ' ~ bare_ext ~ ' ') in allowed_ext_text)) %}
+        {% if filename and filename_matches and not ignored_name.value and not ext_ignored and ext_allowed %}
+          {% if ctype in printable_mimes %}
+            {% set ns.has_printable = true %}
+          {% else %}
+            {% for ext in printable_exts %}
+              {% if filename.endswith(ext) %}
+                {% set ns.has_printable = true %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
         {% endif %}
       {% endfor %}
-      {{ ns.has_printable }}
+      {{ ns.has_printable or _mail_config_requested }}
 
 # ── Actions ─────────────────────────────────────────────────────────────────
 
@@ -196,14 +275,21 @@ action:
       duplex: "{{ _effective_duplex }}"
       booklet: "{{ booklet }}"
       attachment_filter: "{{ attachment_filter }}"
+      attachment_ignore_filter: "{{ attachment_ignore_filter }}"
+      allowed_extensions: "{{ allowed_extensions }}"
+      ignored_extensions: "{{ ignored_extensions }}"
       sender: "{{ trigger.event.data.sender }}"
       mail_subject: "{{ trigger.event.data.subject }}"
       mail_text: "{{ trigger.event.data.text | default('') }}"
+      mail_config_allowed: "{{ _mail_config_allowed }}"
+    response_variable: print_bridge_result
 
   - alias: "Mark email as seen (optional)"
     if:
       - condition: template
-        value_template: "{{ mark_as_seen }}"
+        value_template: >
+          {{ mark_as_seen
+             and (print_bridge_result.merged_attachment_count | default(0) | int > 0) }}
     then:
       - action: imap.seen
         data:

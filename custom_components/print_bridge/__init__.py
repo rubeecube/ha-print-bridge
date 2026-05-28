@@ -70,6 +70,9 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
         vol.Optional("duplex"): vol.In(DUPLEX_MODES),
         vol.Optional("booklet", default=False): cv.boolean,
         vol.Optional("attachment_filter"): cv.string,
+        vol.Optional("attachment_ignore_filter"): cv.string,
+        vol.Optional("allowed_extensions"): cv.string,
+        vol.Optional("ignored_extensions"): cv.string,
         vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
         vol.Optional("collate"): cv.boolean,
         vol.Optional("orientation"): vol.In(("portrait", "landscape")),
@@ -93,6 +96,9 @@ _PROCESS_IMAP_MESSAGE_SCHEMA = vol.Schema(
         vol.Optional("duplex"): vol.In(DUPLEX_MODES),
         vol.Optional("booklet", default=False): cv.boolean,
         vol.Optional("attachment_filter"): cv.string,
+        vol.Optional("attachment_ignore_filter"): cv.string,
+        vol.Optional("allowed_extensions"): cv.string,
+        vol.Optional("ignored_extensions"): cv.string,
         vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
         vol.Optional("collate"): cv.boolean,
         vol.Optional("orientation"): vol.In(("portrait", "landscape")),
@@ -325,6 +331,9 @@ def _register_services(hass: HomeAssistant) -> None:
             duplex_override=call.data.get("duplex"),
             booklet_override=call.data.get("booklet", False) or None,
             attachment_filter=call.data.get("attachment_filter"),
+            attachment_ignore_filter=call.data.get("attachment_ignore_filter"),
+            allowed_extensions=call.data.get("allowed_extensions"),
+            ignored_extensions=call.data.get("ignored_extensions"),
             copies=call.data.get("copies"),
             collate=call.data.get("collate"),
             orientation=call.data.get("orientation"),
@@ -367,6 +376,9 @@ def _register_services(hass: HomeAssistant) -> None:
             duplex_override=call.data.get("duplex"),
             booklet_override=call.data.get("booklet", False) or None,
             attachment_filter=call.data.get("attachment_filter"),
+            attachment_ignore_filter=call.data.get("attachment_ignore_filter"),
+            allowed_extensions=call.data.get("allowed_extensions"),
+            ignored_extensions=call.data.get("ignored_extensions"),
             copies=call.data.get("copies"),
             collate=call.data.get("collate"),
             orientation=call.data.get("orientation"),
@@ -546,6 +558,9 @@ def _register_services(hass: HomeAssistant) -> None:
         duplex: str | None = call.data.get("duplex")
         booklet: bool = call.data.get("booklet", False)
         attachment_filter: str | None = call.data.get("attachment_filter")
+        attachment_ignore_filter: str | None = call.data.get("attachment_ignore_filter")
+        allowed_extensions: str | None = call.data.get("allowed_extensions")
+        ignored_extensions: str | None = call.data.get("ignored_extensions")
         copies: int | None = call.data.get("copies")
         collate: bool | None = call.data.get("collate")
         orientation: str | None = call.data.get("orientation")
@@ -561,6 +576,9 @@ def _register_services(hass: HomeAssistant) -> None:
             duplex=duplex,
             booklet=booklet,
             attachment_filter=attachment_filter,
+            attachment_ignore_filter=attachment_ignore_filter,
+            allowed_extensions=allowed_extensions,
+            ignored_extensions=ignored_extensions,
             copies=copies,
             collate=collate,
             orientation=orientation,
@@ -580,6 +598,9 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("duplex"): vol.In(DUPLEX_MODES),
                 vol.Optional("booklet", default=False): cv.boolean,
                 vol.Optional("attachment_filter"): cv.string,
+                vol.Optional("attachment_ignore_filter"): cv.string,
+                vol.Optional("allowed_extensions"): cv.string,
+                vol.Optional("ignored_extensions"): cv.string,
                 vol.Optional("copies"): vol.All(int, vol.Range(min=1, max=20)),
                 vol.Optional("collate"): cv.boolean,
                 vol.Optional("orientation"): vol.In(("portrait", "landscape")),

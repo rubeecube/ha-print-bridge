@@ -42,6 +42,7 @@ from .document_converter import (
     DocumentConversionError,
     UnsupportedDocumentError,
     convert_document_to_pdf,
+    extension_for_document,
     is_printable_attachment,
     merge_pdf_documents,
     printable_type,
@@ -122,6 +123,14 @@ _PRINTER_BUSY_QUEUE_MAX_ATTEMPTS = 120
 _PRINTER_BUSY_STATUS_CODES = {0x0506, 0x0507}
 _QUEUE_FILE_STABLE_SECONDS = 2
 _QUEUE_IGNORED_SUFFIXES = (".tmp", ".part", ".crdownload")
+_TEXT_FILTER_SPLIT_RE = re.compile(r"[,;\n]+")
+_EXTENSION_FILTER_SPLIT_RE = re.compile(r"[\s,;]+")
+_FILTER_SKIP_MARKERS = (
+    "does not match filter",
+    "matches ignored filename filter",
+    "has ignored extension",
+    "is not in allowed extensions",
+)
 _SCHEDULE_DAY_ALIASES = {
     "mon": "mon",
     "monday": "mon",
@@ -255,6 +264,87 @@ def _is_printable_part(part_key: str, part_info: dict[str, Any]) -> bool:
         str(part_info.get("content_type", "")),
         include_unsupported=True,
     )
+
+
+def _normalise_text_filters(value: Any) -> tuple[str, ...]:
+    """Return case-insensitive filename substring filters."""
+    if not value:
+        return ()
+    if isinstance(value, str):
+        raw_values = _TEXT_FILTER_SPLIT_RE.split(value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_values = [str(item) for item in value]
+    else:
+        raw_values = [str(value)]
+
+    filters: list[str] = []
+    for raw_value in raw_values:
+        item = raw_value.strip().lower()
+        if item and item not in filters:
+            filters.append(item)
+    return tuple(filters)
+
+
+def _normalise_extension_filters(value: Any) -> tuple[str, ...]:
+    """Return normalized extensions, accepting pdf, .pdf, or *.pdf tokens."""
+    if not value:
+        return ()
+    if isinstance(value, str):
+        raw_values = _EXTENSION_FILTER_SPLIT_RE.split(value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_values = [str(item) for item in value]
+    else:
+        raw_values = [str(value)]
+
+    extensions: list[str] = []
+    for raw_value in raw_values:
+        token = raw_value.strip().lower()
+        if not token:
+            continue
+        if token.startswith("*."):
+            token = token[2:]
+        token = token.removeprefix(".")
+        if not token:
+            continue
+        extension = f".{token}"
+        if extension not in extensions:
+            extensions.append(extension)
+    return tuple(extensions)
+
+
+def _filter_skip_reason(
+    filename: str,
+    content_type: str,
+    *,
+    attachment_filter: str | None,
+    attachment_ignore_filter: Any = None,
+    allowed_extensions: Any = None,
+    ignored_extensions: Any = None,
+) -> str | None:
+    """Return a skip reason when attachment filters exclude a filename."""
+    lower_filename = filename.lower()
+    if attachment_filter and attachment_filter.strip().lower() not in lower_filename:
+        return f"does not match filter '{attachment_filter}'"
+
+    for text_filter in _normalise_text_filters(attachment_ignore_filter):
+        if text_filter in lower_filename:
+            return f"matches ignored filename filter '{text_filter}'"
+
+    extension = extension_for_document(filename, content_type)
+    ignored_exts = _normalise_extension_filters(ignored_extensions)
+    if extension and extension in ignored_exts:
+        return f"has ignored extension '{extension}'"
+
+    allowed_exts = _normalise_extension_filters(allowed_extensions)
+    if allowed_exts and extension not in allowed_exts:
+        displayed = extension or "unknown"
+        return f"extension '{displayed}' is not in allowed extensions"
+
+    return None
+
+
+def _is_filter_skip(reason: str) -> bool:
+    return any(marker in reason for marker in _FILTER_SKIP_MARKERS)
 
 
 def _decode_part_payload(response: dict[str, Any]) -> bytes:
@@ -977,6 +1067,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     parts=parts,
                     sender=sender,
                     attachment_filter=mail_params.attachment_filter,
+                    attachment_ignore_filter=mail_params.attachment_ignore_filter,
+                    allowed_extensions=mail_params.allowed_extensions,
+                    ignored_extensions=mail_params.ignored_extensions,
                     duplex_override=mail_params.duplex,
                     booklet_override=mail_params.booklet,
                     copies=mail_params.copies,
@@ -1050,6 +1143,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             parts=parts,
             sender=sender,
             attachment_filter=mail_params.attachment_filter,
+            attachment_ignore_filter=mail_params.attachment_ignore_filter,
+            allowed_extensions=mail_params.allowed_extensions,
+            ignored_extensions=mail_params.ignored_extensions,
             duplex_override=mail_params.duplex,
             booklet_override=mail_params.booklet,
             copies=mail_params.copies,
@@ -1670,6 +1766,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     "booklet=false; "
                     "nb_copies=1; "
                     f"collate={'true' if self._collate else 'false'}; "
+                    'attachment_filter=""; '
+                    'attachment_ignore_filter=""; '
+                    'allowed_extensions=""; '
+                    'ignored_extensions=""; '
                     f"dpi={self._raster_dpi}; "
                     f"reverse_order={'true' if self._reverse_order else 'false'}; "
                     "reply=true"
@@ -1677,6 +1777,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "",
                 "Optional parameters:",
                 "- attachment_filter=\"text in filename\"",
+                "- attachment_ignore_filter=\"draft, sample\"",
+                "- allowed_extensions=\"pdf docx jpg\"",
+                "- ignored_extensions=\"png, tiff\"",
                 "- orientation=portrait|landscape",
                 "- media=iso_a4_210x297mm|na_letter_8.5x11in|na_legal_8.5x14in",
                 "- order=reverse|normal",
@@ -1696,6 +1799,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         booklet_override: bool | None = None,
         sender: str | None = None,
         attachment_filter: str | None = None,
+        attachment_ignore_filter: str | None = None,
+        allowed_extensions: Any = None,
+        ignored_extensions: Any = None,
         copies: int | None = None,
         collate: bool | None = None,
         orientation: str | None = None,
@@ -1746,6 +1852,15 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             mail_params.booklet if mail_params.booklet is not None else booklet_override
         )
         effective_attachment_filter = mail_params.attachment_filter or attachment_filter
+        effective_attachment_ignore_filter = (
+            mail_params.attachment_ignore_filter or attachment_ignore_filter
+        )
+        effective_allowed_extensions = (
+            mail_params.allowed_extensions or allowed_extensions
+        )
+        effective_ignored_extensions = (
+            mail_params.ignored_extensions or ignored_extensions
+        )
         effective_copies = mail_params.copies or copies
         effective_collate = (
             mail_params.collate if mail_params.collate is not None else collate
@@ -1764,17 +1879,21 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             filename or f"attachment_{part_key}.pdf"
         )
 
-        # Skip this attachment if it doesn't match the caller's name filter.
-        if effective_attachment_filter and effective_attachment_filter.strip():
-            if effective_attachment_filter.strip().lower() not in effective_filename.lower():
-                logger.debug(
-                    "Skipping attachment '%s' — does not match filter '%s'",
-                    effective_filename, effective_attachment_filter,
-                )
-                return PrintJobResult(
-                    filename=effective_filename, success=True,
-                    error=f"skipped: does not match filter '{effective_attachment_filter}'",
-                )
+        skip_reason = _filter_skip_reason(
+            effective_filename,
+            "",
+            attachment_filter=effective_attachment_filter,
+            attachment_ignore_filter=effective_attachment_ignore_filter,
+            allowed_extensions=effective_allowed_extensions,
+            ignored_extensions=effective_ignored_extensions,
+        )
+        if skip_reason:
+            logger.debug("Skipping attachment '%s' — %s", effective_filename, skip_reason)
+            return PrintJobResult(
+                filename=effective_filename,
+                success=True,
+                error=f"skipped: {skip_reason}",
+            )
 
         # Deduplication: if another blueprint already printed this exact attachment
         # within the last 60 seconds, skip silently to prevent double-printing.
@@ -1834,6 +1953,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         booklet_override: bool | None = None,
         sender: str | None = None,
         attachment_filter: str | None = None,
+        attachment_ignore_filter: str | None = None,
+        allowed_extensions: Any = None,
+        ignored_extensions: Any = None,
         copies: int | None = None,
         collate: bool | None = None,
         orientation: str | None = None,
@@ -1936,6 +2058,15 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
         effective_duplex = mail_params.duplex or duplex_override or self._duplex_mode
         effective_attachment_filter = mail_params.attachment_filter or attachment_filter
+        effective_attachment_ignore_filter = (
+            mail_params.attachment_ignore_filter or attachment_ignore_filter
+        )
+        effective_allowed_extensions = (
+            mail_params.allowed_extensions or allowed_extensions
+        )
+        effective_ignored_extensions = (
+            mail_params.ignored_extensions or ignored_extensions
+        )
         effective_copies = mail_params.copies or copies
         effective_collate = (
             mail_params.collate if mail_params.collate is not None else collate
@@ -1954,18 +2085,28 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             uid,
             parts or {},
             effective_attachment_filter,
+            effective_attachment_ignore_filter,
+            effective_allowed_extensions,
+            effective_ignored_extensions,
         )
         job_filename = self._message_job_filename(mail_subject or "", uid, summary)
 
         if not summary.converted:
-            filter_text = (effective_attachment_filter or "").strip()
+            filter_active = any(
+                (
+                    (effective_attachment_filter or "").strip(),
+                    _normalise_text_filters(effective_attachment_ignore_filter),
+                    _normalise_extension_filters(effective_allowed_extensions),
+                    _normalise_extension_filters(effective_ignored_extensions),
+                )
+            )
             filter_excluded_all = (
-                bool(filter_text)
+                filter_active
                 and bool(summary.skipped)
-                and all("does not match filter" in skipped for skipped in summary.skipped)
+                and all(_is_filter_skip(skipped) for skipped in summary.skipped)
             )
             if filter_excluded_all:
-                status = f"skipped: no attachments matched filter '{filter_text}'"
+                status = "skipped: no attachments matched filters"
                 result = PrintJobResult(
                     filename=job_filename,
                     success=True,
@@ -2084,6 +2225,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         uid: str,
         parts: dict[str, dict[str, Any]],
         attachment_filter: str | None,
+        attachment_ignore_filter: Any = None,
+        allowed_extensions: Any = None,
+        ignored_extensions: Any = None,
     ) -> AttachmentConversionSummary:
         """Fetch and convert all printable attachment parts for one message."""
         summary = AttachmentConversionSummary()
@@ -2096,8 +2240,16 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             resolved = printable_type(filename, content_type)
             if resolved is None:
                 continue
-            if attachment_filter and attachment_filter.strip().lower() not in filename.lower():
-                summary.skipped.append(f"{filename}: does not match filter '{attachment_filter}'")
+            skip_reason = _filter_skip_reason(
+                filename,
+                content_type,
+                attachment_filter=attachment_filter,
+                attachment_ignore_filter=attachment_ignore_filter,
+                allowed_extensions=allowed_extensions,
+                ignored_extensions=ignored_extensions,
+            )
+            if skip_reason:
+                summary.skipped.append(f"{filename}: {skip_reason}")
                 continue
             if not resolved.supported:
                 summary.skipped.append(f"{filename}: {resolved.reason or 'unsupported file type'}")
@@ -2307,6 +2459,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         duplex: str | None = None,
         booklet: bool = False,
         attachment_filter: str | None = None,
+        attachment_ignore_filter: str | None = None,
+        allowed_extensions: str | None = None,
+        ignored_extensions: str | None = None,
         copies: int | None = None,
         collate: bool | None = None,
         orientation: str | None = None,
@@ -2361,6 +2516,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             booklet_override=booklet or None,
             sender=sender,
             attachment_filter=attachment_filter,
+            attachment_ignore_filter=attachment_ignore_filter,
+            allowed_extensions=allowed_extensions,
+            ignored_extensions=ignored_extensions,
             copies=copies,
             collate=collate,
             orientation=orientation,

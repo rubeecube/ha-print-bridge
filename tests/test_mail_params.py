@@ -20,13 +20,17 @@ def test_subject_bracket_params_are_parsed():
 def test_body_print_bridge_line_supports_named_settings():
     params = parse_mail_print_parameters(
         "Print this",
-        'Print-Bridge: booklet=true; paper=a4; orientation=landscape; attachment="Au Puits"',
+        'Print-Bridge: booklet=true; paper=a4; orientation=landscape; attachment="Au Puits"; '
+        'ignore_filename="draft"; only_extensions="pdf docx"; skip_extensions=png',
     )
 
     assert params.booklet is True
     assert params.media == "iso_a4_210x297mm"
     assert params.orientation == "landscape"
     assert params.attachment_filter == "Au Puits"
+    assert params.attachment_ignore_filter == "draft"
+    assert params.allowed_extensions == (".pdf", ".docx")
+    assert params.ignored_extensions == (".png",)
 
 
 def test_invalid_params_report_errors():
@@ -84,3 +88,11 @@ def test_invalid_bool_values_report_errors():
     assert params.collate is None
     assert params.reverse_order is None
     assert len(params.errors) == 2
+
+
+def test_invalid_extension_values_report_errors():
+    params = parse_mail_print_parameters('[pb allowed_extensions="pdf ../bad"]', "")
+
+    assert params.allowed_extensions is None
+    assert len(params.errors) == 1
+    assert "Invalid allowed_extensions value" in params.errors[0]

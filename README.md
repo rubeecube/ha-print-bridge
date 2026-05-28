@@ -396,6 +396,9 @@ Used internally by the blueprint; callable from any automation or script.
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
 | `attachment_filter` | no | Only print if the filename contains this text |
+| `attachment_ignore_filter` | no | Skip filenames containing any of these comma/semicolon-separated substrings |
+| `allowed_extensions` | no | Only print these extensions, for example `pdf docx jpg` |
+| `ignored_extensions` | no | Skip these extensions, for example `png tiff` |
 | `copies` | no | Number of copies, 1-20 |
 | `collate` | no | Collate multi-copy jobs; default is `true` |
 | `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
@@ -420,6 +423,9 @@ multiple attachments.
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
 | `attachment_filter` | no | Only include attachment filenames containing this text |
+| `attachment_ignore_filter` | no | Skip filenames containing any of these comma/semicolon-separated substrings |
+| `allowed_extensions` | no | Only include these extensions, for example `pdf docx jpg` |
+| `ignored_extensions` | no | Skip these extensions, for example `png tiff` |
 | `copies` | no | Number of copies, 1-20 |
 | `collate` | no | Collate multi-copy jobs; default is `true` |
 | `orientation` | no | `portrait` or `landscape`; booklet imposition is landscape |
@@ -442,6 +448,9 @@ UID from the Lovelace email table or the `filter_preview` sensor.
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
 | `attachment_filter` | no | Only print matching attachment filenames |
+| `attachment_ignore_filter` | no | Skip filenames containing any of these comma/semicolon-separated substrings |
+| `allowed_extensions` | no | Only print these extensions, for example `pdf docx jpg` |
+| `ignored_extensions` | no | Skip these extensions, for example `png tiff` |
 | `copies` | no | Number of copies, 1-20 |
 | `collate` | no | Collate multi-copy jobs; default is `true` |
 | `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
@@ -494,6 +503,9 @@ Supported parameters:
 | `dpi` / `raster_dpi` | `72` through `600`; only used when direct IPP requires raster conversion |
 | `quality` | `draft`, `fast`, `normal`, `high`, or `best` (`fast` maps to 150 DPI) |
 | `attachment` / `attachment_filter` / `file` | Filename substring to print only matching attachments |
+| `attachment_ignore_filter` / `ignore_filename` / `skip_filename` | Filename substring list to skip matching attachments |
+| `allowed_extensions` / `only_extensions` / `include_extensions` | Extension allow-list, such as `pdf docx jpg`; dots are optional |
+| `ignored_extensions` / `ignore_extensions` / `skip_extensions` | Extension deny-list, such as `png tiff`; dots are optional |
 | `reply` / `status_reply` | `true` to request a status reply, `false` to suppress one |
 | `reverse` / `reverse_order` / `order` | `true`, `false`, `reverse`, or `normal` for one-sided page order |
 | `config` / `command=config` | Reply with all configurable mail parameters when no printable attachment is present |
@@ -584,14 +596,14 @@ https://github.com/rubeecube/ha-print-bridge/blob/main/blueprints/automation/pri
 | Input | Default | Description |
 |---|---|---|
 | IMAP Account | — | Which IMAP integration entry to monitor |
-| Allowed Senders | *(all)* | Comma-separated addresses |
-| IMAP Folder Filter | *(all)* | Comma-separated folder names |
-| Subject Must Contain | *(all)* | Optional keyword gate on the subject line |
-| Default Duplex Mode | Two-sided portrait | Fallback for all jobs |
-| One-sided Keywords | — | Subject keywords that override to one-sided |
-| Two-sided Portrait Keywords | — | Subject keywords that force long-edge duplex |
-| Booklet Keywords | — | Subject keywords that trigger booklet reordering |
-| Booklet Senders | — | Senders whose mail is always printed as a booklet |
+| Sender | *(all)* | Optional sender substring |
+| Subject contains | *(all)* | Optional keyword gate on the subject line |
+| Attachment name contains | *(all)* | Only print matching filenames |
+| Ignore attachment names containing | — | Skip filenames containing any configured substring |
+| Only print extensions | *(all printable)* | Optional allow-list such as `pdf docx jpg` |
+| Ignore extensions | — | Optional deny-list such as `png tiff` |
+| Booklet printing | Off | Reorder pages and force short-edge duplex |
+| Duplex | Two-sided portrait | Fallback duplex mode |
 | Mark as Seen | On | Set `\Seen` flag on the email after processing |
 
 ### Decision logic
@@ -604,8 +616,8 @@ imap_content event received
         ├─ sender in allowed_senders? (empty = yes) ── no ──► skip
         │
         ├─ subject contains filter? (empty = yes) ───── no ──► skip
-        │
-        ├─ any printable attachment? ───────────────── no ──► skip
+        ├─ filename / extension rules match? ───────── no ──► skip
+        ├─ any printable attachment left? ───────────── no ──► skip
         │
         └─ convert matching attachments to PDF
                  apply mail parameters / blueprint settings

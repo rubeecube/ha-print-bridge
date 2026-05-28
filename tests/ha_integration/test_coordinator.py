@@ -266,6 +266,9 @@ async def test_pdf_event_triggers_fetch_and_print(hass: HomeAssistant) -> None:
         parts=_pdf_parts(),
         sender="sender@example.com",
         attachment_filter=None,
+        attachment_ignore_filter=None,
+        allowed_extensions=None,
+        ignored_extensions=None,
         duplex_override=None,
         booklet_override=None,
         copies=None,
@@ -336,6 +339,9 @@ async def test_mail_params_override_imap_event_print_settings(
         "parts": _pdf_parts("Au Puits booklet.pdf"),
         "sender": "sender@example.com",
         "attachment_filter": None,
+        "attachment_ignore_filter": None,
+        "allowed_extensions": None,
+        "ignored_extensions": None,
         "duplex_override": "two-sided-short-edge",
         "booklet_override": True,
         "copies": 2,
@@ -1055,6 +1061,97 @@ async def test_process_imap_message_ignores_filter_only_skips(
     assert result.attachments == []
     assert "no attachments matched filter" in str(result.status)
     assert "invoice.pdf" in result.skipped_attachments[0]
+    mock_send.assert_not_awaited()
+    mock_reply.assert_not_awaited()
+
+
+async def test_process_imap_message_applies_filename_and_extension_filters(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+    pdf_data = _make_a4_pdf(page_count=1)
+    parts = {
+        "1": {"content_type": "application/pdf", "filename": "invoice.pdf"},
+        "2": {"content_type": "text/plain", "filename": "notes.txt"},
+        "3": {"content_type": "application/pdf", "filename": "draft.pdf"},
+    }
+    fetched: list[str] = []
+
+    async def _fetch_part(call: ServiceCall) -> dict:
+        fetched.append(str(call.data["part"]))
+        assert call.data["part"] == "1"
+        return {
+            "part_data": base64.b64encode(pdf_data).decode(),
+            "content_transfer_encoding": "base64",
+            "content_type": "application/pdf",
+        }
+
+    hass.services.async_register(
+        "imap",
+        "fetch_part",
+        _fetch_part,
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    send_result = PrintJobResult(filename="message.pdf", success=True)
+    with (
+        patch.object(
+            coordinator,
+            "async_send_print_job",
+            new=AsyncMock(return_value=send_result),
+        ) as mock_send,
+        patch.object(coordinator, "_async_send_status_reply", new=AsyncMock()),
+        patch.object(coordinator, "_async_notify_job", new=AsyncMock()),
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        result = await coordinator.async_process_imap_message(
+            entry_id="imap_entry_1",
+            uid="99",
+            parts=parts,
+            sender="sender@example.com",
+            mail_subject="Filtered job",
+            mail_text="",
+            attachment_ignore_filter="draft",
+            allowed_extensions="pdf",
+        )
+
+    assert fetched == ["1"]
+    assert result.attachments == ["invoice.pdf"]
+    assert result.merged_attachment_count == 1
+    assert any("notes.txt" in skipped for skipped in result.skipped_attachments)
+    assert any("draft.pdf" in skipped for skipped in result.skipped_attachments)
+    mock_send.assert_awaited_once()
+
+
+async def test_process_imap_message_treats_extension_only_skips_as_ignored(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+    parts = {
+        "1": {"content_type": "application/pdf", "filename": "invoice.pdf"},
+        "2": {"content_type": "text/plain", "filename": "notes.txt"},
+    }
+
+    with (
+        patch.object(coordinator, "async_send_print_job", new=AsyncMock()) as mock_send,
+        patch.object(coordinator, "_async_send_status_reply", new=AsyncMock()) as mock_reply,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        result = await coordinator.async_process_imap_message(
+            entry_id="imap_entry_1",
+            uid="99",
+            parts=parts,
+            sender="sender@example.com",
+            mail_subject="Wrong extension rule",
+            mail_text="Print-Bridge: reply=true",
+            allowed_extensions="docx",
+        )
+
+    assert result.success is True
+    assert result.status_code == "skipped-filter"
+    assert result.merged_attachment_count == 0
+    assert result.attachments == []
+    assert "no attachments matched filters" in str(result.status)
     mock_send.assert_not_awaited()
     mock_reply.assert_not_awaited()
 
