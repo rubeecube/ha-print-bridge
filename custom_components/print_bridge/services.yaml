@@ -58,6 +58,30 @@ print_email:
       required: false
       selector:
         text:
+    attachment_ignore_filter:
+      name: Ignore Attachment Filter
+      description: >-
+        Optional filename substring list; matching printable attachments are skipped.
+        Separate multiple values with commas, semicolons, or new lines.
+      required: false
+      selector:
+        text:
+    allowed_extensions:
+      name: Only Extensions
+      description: >-
+        Optional extension allow-list, such as pdf docx jpg. Dots are optional.
+        When set, only attachments with these extensions are printed.
+      required: false
+      selector:
+        text:
+    ignored_extensions:
+      name: Ignore Extensions
+      description: >-
+        Optional extension deny-list, such as png tiff. Dots are optional.
+        Matching attachments are skipped.
+      required: false
+      selector:
+        text:
     copies:
       name: Copies
       description: Number of copies to request from the printer.
@@ -348,6 +372,24 @@ process_imap_part:
       required: false
       selector:
         text:
+    attachment_ignore_filter:
+      name: Ignore Attachment Filter
+      description: Optional filename substring list; matching printable attachments are skipped.
+      required: false
+      selector:
+        text:
+    allowed_extensions:
+      name: Only Extensions
+      description: Optional extension allow-list, such as pdf docx jpg.
+      required: false
+      selector:
+        text:
+    ignored_extensions:
+      name: Ignore Extensions
+      description: Optional extension deny-list, such as png tiff.
+      required: false
+      selector:
+        text:
     copies:
       name: Copies
       description: Number of copies to request from the printer.
@@ -479,6 +521,24 @@ process_imap_message:
     attachment_filter:
       name: Attachment Filter
       description: Optional filename substring; only matching printable attachments print.
+      required: false
+      selector:
+        text:
+    attachment_ignore_filter:
+      name: Ignore Attachment Filter
+      description: Optional filename substring list; matching printable attachments are skipped.
+      required: false
+      selector:
+        text:
+    allowed_extensions:
+      name: Only Extensions
+      description: Optional extension allow-list, such as pdf docx jpg.
+      required: false
+      selector:
+        text:
+    ignored_extensions:
+      name: Ignore Extensions
+      description: Optional extension deny-list, such as png tiff.
       required: false
       selector:
         text:

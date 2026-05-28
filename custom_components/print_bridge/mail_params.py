@@ -27,10 +27,19 @@ _CONFIG_REQUEST_VALUES = {"config", "configuration", "settings", "parameters", "
 _BODY_COPIES_LINE_RE = re.compile(
     r"(?im)^\s*(?:copies?|nb[_\s-]?copies?)\s*[:=]?\s*(?P<copies>\d{1,2})\s*$"
 )
+_EXTENSION_LIST_RE = re.compile(r"[\s,;]+")
+_VALID_EXTENSION_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 
 _KEY_ALIASES = {
     "attachment": "attachment_filter",
     "attachment_filter": "attachment_filter",
+    "attachment_ignore": "attachment_ignore_filter",
+    "attachment_ignore_filter": "attachment_ignore_filter",
+    "allowed_ext": "allowed_extensions",
+    "allowed_extension": "allowed_extensions",
+    "allowed_extensions": "allowed_extensions",
+    "allow_ext": "allowed_extensions",
+    "allow_extensions": "allowed_extensions",
     "booklet": "booklet",
     "collate": "collate",
     "collated": "collate",
@@ -41,15 +50,39 @@ _KEY_ALIASES = {
     "copies": "copies",
     "copy": "copies",
     "duplex": "duplex",
+    "exclude_attachment": "attachment_ignore_filter",
+    "exclude_ext": "ignored_extensions",
+    "exclude_extension": "ignored_extensions",
+    "exclude_extensions": "ignored_extensions",
+    "exclude_file": "attachment_ignore_filter",
+    "exclude_filename": "attachment_ignore_filter",
+    "exclude_filenames": "attachment_ignore_filter",
     "file": "attachment_filter",
+    "ignore_attachment": "attachment_ignore_filter",
+    "ignore_attachment_filter": "attachment_ignore_filter",
+    "ignore_ext": "ignored_extensions",
+    "ignore_extension": "ignored_extensions",
+    "ignore_extensions": "ignored_extensions",
+    "ignore_file": "attachment_ignore_filter",
+    "ignore_filename": "attachment_ignore_filter",
+    "ignore_filenames": "attachment_ignore_filter",
+    "ignored_ext": "ignored_extensions",
+    "ignored_extensions": "ignored_extensions",
+    "include_ext": "allowed_extensions",
+    "include_extension": "allowed_extensions",
+    "include_extensions": "allowed_extensions",
     "media": "media",
     "nb_copies": "copies",
     "nb_copy": "copies",
     "nbcopies": "copies",
+    "only_ext": "allowed_extensions",
+    "only_extension": "allowed_extensions",
+    "only_extensions": "allowed_extensions",
     "orientation": "orientation",
     "order": "order",
     "page_order": "order",
     "paper": "media",
+    "print_extensions": "allowed_extensions",
     "quantity": "copies",
     "raster_dpi": "raster_dpi",
     "reply": "reply",
@@ -57,6 +90,13 @@ _KEY_ALIASES = {
     "reverse_order": "reverse_order",
     "settings": "config_request",
     "sides": "duplex",
+    "skip_attachment": "attachment_ignore_filter",
+    "skip_ext": "ignored_extensions",
+    "skip_extension": "ignored_extensions",
+    "skip_extensions": "ignored_extensions",
+    "skip_file": "attachment_ignore_filter",
+    "skip_filename": "attachment_ignore_filter",
+    "skip_filenames": "attachment_ignore_filter",
     "status_reply": "reply",
     "dpi": "raster_dpi",
     "quality": "raster_dpi",
@@ -112,6 +152,9 @@ class MailPrintParameters:
     media: str | None = None
     raster_dpi: int | None = None
     attachment_filter: str | None = None
+    attachment_ignore_filter: str | None = None
+    allowed_extensions: tuple[str, ...] | None = None
+    ignored_extensions: tuple[str, ...] | None = None
     reply: bool | None = None
     reverse_order: bool | None = None
     config_request: bool = False
@@ -130,6 +173,9 @@ class MailPrintParameters:
                 self.media,
                 self.raster_dpi,
                 self.attachment_filter,
+                self.attachment_ignore_filter,
+                self.allowed_extensions,
+                self.ignored_extensions,
                 self.reply,
                 self.reverse_order,
             )
@@ -146,12 +192,15 @@ class MailPrintParameters:
             "media",
             "raster_dpi",
             "attachment_filter",
+            "attachment_ignore_filter",
+            "allowed_extensions",
+            "ignored_extensions",
             "reply",
             "reverse_order",
         ):
             value = getattr(self, key)
             if value is not None:
-                data[key] = value
+                data[key] = ",".join(value) if isinstance(value, tuple) else value
         return data
 
 
@@ -219,7 +268,20 @@ def parse_mail_print_parameters(subject: str = "", body: str = "") -> MailPrintP
             raw_pairs.get("raster_dpi"),
             errors,
         ),
-        attachment_filter=raw_pairs.get("attachment_filter"),
+        attachment_filter=_none_if_empty(raw_pairs.get("attachment_filter")),
+        attachment_ignore_filter=_none_if_empty(
+            raw_pairs.get("attachment_ignore_filter")
+        ),
+        allowed_extensions=_parse_extension_list(
+            raw_pairs.get("allowed_extensions"),
+            "allowed_extensions",
+            errors,
+        ),
+        ignored_extensions=_parse_extension_list(
+            raw_pairs.get("ignored_extensions"),
+            "ignored_extensions",
+            errors,
+        ),
         reply=_parse_bool(raw_pairs.get("reply"), "reply", errors),
         reverse_order=_parse_reverse_order(raw_pairs, errors),
         config_request=config_request,
@@ -237,6 +299,13 @@ def _strip_quotes(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1].strip()
     return value.strip()
+
+
+def _none_if_empty(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _is_config_command(value: str) -> bool:
@@ -362,3 +431,35 @@ def _parse_raster_dpi(value: str | None, errors: list[str]) -> int | None:
         return dpi
     errors.append(f"Invalid dpi value '{value}': expected 72 through 600")
     return None
+
+
+def _parse_extension_list(
+    value: str | None,
+    name: str,
+    errors: list[str],
+) -> tuple[str, ...] | None:
+    if not value:
+        return None
+
+    extensions: list[str] = []
+    invalid: list[str] = []
+    for raw_token in _EXTENSION_LIST_RE.split(value):
+        token = raw_token.strip().lower()
+        if not token:
+            continue
+        if token.startswith("*."):
+            token = token[2:]
+        token = token.removeprefix(".")
+        if not token or not _VALID_EXTENSION_RE.fullmatch(token):
+            invalid.append(raw_token)
+            continue
+        extension = f".{token}"
+        if extension not in extensions:
+            extensions.append(extension)
+
+    if invalid:
+        errors.append(
+            f"Invalid {name} value '{value}': expected extensions like pdf, .docx, or *.png"
+        )
+        return None
+    return tuple(extensions) or None
