@@ -7,20 +7,20 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-179%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.26-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-205%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.30-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
 
 Print common email attachments directly to a network printer — fully inside Home Assistant.
 
-Print Bridge turns an email inbox or local folder into a controlled print
-intake. It listens to Home Assistant's built-in IMAP events or scans a configured
-queue folder, fetches printable documents, converts supported types to an
-internal PDF, merges all matching attachments in one email into one job, applies
-duplex/booklet rules, and submits the result to CUPS or directly to an
-IPP/AirPrint printer.
+Print Bridge turns an email inbox, Signal conversation, or local folder into a
+controlled print intake. It listens to Home Assistant's built-in IMAP events,
+receives approved Signal document attachments, or scans a configured queue
+folder, fetches printable documents, converts supported types to an internal
+PDF, merges related attachments into one job, applies duplex/booklet rules, and
+submits the result to CUPS or directly to an IPP/AirPrint printer.
 
 It was built because Home Assistant has the pieces but not the end-to-end
 printing workflow:
@@ -61,6 +61,7 @@ Home Assistant automations stay simple.
 | Use case | Why Print Bridge helps |
 |---|---|
 | **Email-to-printer mailbox** | Forward documents to a dedicated mailbox such as `print@example.com`; matching attachments print automatically. |
+| **Signal-to-printer with confirmation** | Receive documents by Signal from trusted contacts or groups, then print only after approving the pending job. |
 | **Folder-to-printer drop box** | Put files in the configured queue folder and Print Bridge prints them even when no IMAP integration exists. |
 | **Family or office shared printing** | Allow trusted senders only, while keeping printer access inside Home Assistant. |
 | **Weekly newsletters and parasha sheets** | Match sender, subject, folder, or filename; print regular PDFs automatically without opening a laptop. |
@@ -96,6 +97,7 @@ them.
 | | |
 |---|---|
 | **Email event-driven** | Triggered instantly by HA's IMAP push (IDLE) — no mailbox polling |
+| **Signal intake with confirmation** | Receives Signal document attachments from a signal-cli-rest-api style module, filters trusted senders/groups, and waits for approval before printing |
 | **Queue folder intake** | Automatically prints supported files dropped in the configured queue folder; IMAP is optional |
 | **Smart setup** | Auto-discovers CUPS printers; pre-fills sender from existing IMAP accounts |
 | **Sender filter** | Accept only specific email addresses, or leave empty to accept all |
@@ -112,10 +114,10 @@ them.
 | **Dashboard configuration** | Switch/select/text entities let Lovelace manage filters, duplex, cleanup, notifications, and schedule settings |
 | **Scheduled printing** | Hold jobs outside allowed days, hours, or a custom HA template gate |
 | **Printer-busy retry queue** | If IPP returns `server-error-busy`, poll readiness and resend automatically |
-| **Queued job view/cancel** | Dashboard shows up to five scheduled or printer-busy jobs and can discard queued work before submission |
+| **Queued job view/cancel** | Dashboard shows up to five scheduled, Signal-pending, or printer-busy jobs and can discard queued work before submission |
 | **Blueprint** | Advanced per-sender/per-keyword rules with folder, duplex, and booklet logic |
 | **Lovelace dashboard** | Paste-ready printer view plus detailed audit view |
-| **Services** | `print_file`, `clear_queue`, `process_imap_message`, `process_imap_part`, `check_filter`, `print_email` |
+| **Services** | `print_file`, `clear_queue`, `process_imap_message`, `process_imap_part`, `check_filter`, `print_email`, `confirm_signal_job`, `cancel_signal_job`, `check_signal_groups` |
 
 ---
 
@@ -126,6 +128,7 @@ them.
 | Integration | Required? | Role |
 |---|:---:|---|
 | **HA IMAP** (built-in) | Optional | Required only for email automation. Without IMAP, Print Bridge can still print files from the queue folder or via `print_file`. |
+| **Signal REST module** | Optional | Required only for Signal document intake. Use a signal-cli-rest-api compatible module, configured by URL and Signal account/number. |
 | **HA IPP** (built-in) | **No** | Monitors printer status (ink, paper, errors). Print Bridge does **not** use it — Print Bridge *is* its own IPP client and sends `Print-Job` packets directly. |
 | **CUPS add-on** | Optional | Needed for USB printers or non-AirPrint printers that require driver conversion. AirPrint printers can be reached directly via IPP. |
 
@@ -233,6 +236,23 @@ format before submission. Leave the CUPS fields empty.
 
 Use CUPS when: the printer is USB-attached, needs driver/raster conversion, or you want a managed print queue.
 
+### 3. Signal REST Module — optional for Signal printing
+
+Signal printing is disabled by default and is confirmation-only. Configure a
+signal-cli-rest-api compatible receiver module in Print Bridge options:
+
+| Field | Description |
+|---|---|
+| Signal Module ID | Defaults to `019ef0ac-4dcf-72b2-b5ec-3ff077450a00`. |
+| Signal REST URL | Base URL of the Signal REST module, for example `http://homeassistant.local:8080`. |
+| Signal Account / Number | Registered Signal account used by the module. |
+| Signal Allowed Senders | Trusted Signal phone numbers or UUIDs, one per line. |
+| Signal Allowed Group IDs | Trusted Signal group IDs, one per line. Use **Check Signal Groups** to discover exact IDs. |
+| Signal Confirmation Mode | `Home Assistant and Signal` by default. Pending jobs can be confirmed from HA or by replying `print <token>` in Signal. |
+
+For group printing, use exact group IDs, not display names. Names can change or
+duplicate; group IDs are the stable filter.
+
 #### Common to both modes
 
 | Field | Description |
@@ -254,6 +274,14 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 | **Delete after printing** | On | Remove successfully printed queue-folder files. If off, printed files are remembered and not reprinted unless modified. |
 | **Print Queue Folder** | `/media/print_queue` | Drop supported files here for folder-to-printer intake. Also used by the queue-depth sensor and `clear_queue`. |
 | **Raster DPI** | `150` | Used only when direct IPP printing must convert PDFs to PWG Raster/JPEG. Lower values are faster and create smaller jobs. |
+| **Enable Signal intake** | Off | Receive Signal document attachments from the configured module. Nothing prints automatically; each received document waits for confirmation. |
+| **Signal Module ID** | `019ef0ac-4dcf-72b2-b5ec-3ff077450a00` | Identifier of the Signal module used by this integration. |
+| **Signal REST URL** | *(empty)* | Base URL for the signal-cli-rest-api compatible module. |
+| **Signal Account / Number** | *(empty)* | Signal account registered in the module. |
+| **Signal Allowed Senders** | *(empty = none)* | Trusted Signal phone numbers or UUIDs. Unlike email, empty means no Signal sender is trusted. |
+| **Signal Allowed Group IDs** | *(empty = none)* | Trusted Signal group IDs. Empty means no Signal group is trusted. |
+| **Signal Confirmation Mode** | Home Assistant and Signal | Confirm pending jobs from HA, Signal replies, or both. |
+| **Signal Confirmation TTL** | `24` | Pending Signal job expiration in hours. |
 | **Email Action after Printing** | Do nothing | What to do with the email after the PDF prints: **Do nothing** / **Mark as read** / **Move to archive folder** / **Delete from server**. |
 | **Archive Folder** | `INBOX/Printed` | Target folder when "Move to archive folder" is selected. Created automatically by most IMAP servers. |
 | **Notify when print fails** | On | Send a HA persistent notification when a job fails (with error details). |
@@ -318,15 +346,20 @@ Then go to **Settings → System → Logs** to view debug output. This shows eac
 | `sensor.print_bridge_*_job_log` | Sensor | Total jobs sent | `jobs[]` — last 50 print attempts with full metadata |
 | `sensor.print_bridge_*_filter_preview` | Sensor | Matching emails with printable attachments | `emails[]`, `checked_at`, `imap_account`, `total_found`, `matching_filter`, `with_pdf`, `with_printable` |
 | `sensor.print_bridge_*_scheduled_queue` | Sensor | Queued job count | `jobs[]` shows up to 5 schedule-held or printer-busy jobs, plus `total_jobs`, `schedule_jobs`, `printer_busy_jobs`, `shown_jobs`, schedule settings |
+| `sensor.print_bridge_*_signal_pending_jobs` | Sensor | Pending Signal jobs | `jobs[]` shows up to 5 waiting Signal confirmation jobs with token, sender/group, attachments, and expiry |
+| `sensor.print_bridge_*_signal_groups` | Sensor | Discovered Signal group count | `groups[]` with exact group IDs from **Check Signal Groups** |
 | `binary_sensor.print_bridge_*_printer_online` | Binary Sensor | `on` / `off` | — |
 | `select.print_bridge_*_imap_account` | Select | Selected IMAP account | Used by **Check Filter** and on-demand email printing when no account is specified |
 | `select.print_bridge_*_target_printer` | Select | Selected printer | Used by dashboard print actions and default print services |
 | `select.print_bridge_*_default_duplex_mode` | Select | Duplex mode | Updates the default duplex option |
 | `select.print_bridge_*_email_action_after_print` | Select | Email action | Updates post-print mailbox cleanup behavior |
+| `select.print_bridge_*_signal_confirmation_mode` | Select | Signal confirmation mode | Controls whether HA, Signal replies, or both can confirm jobs |
 | `switch.print_bridge_*_*` | Switch | `on` / `off` | Auto-print, delete-after-printing, notifications, and schedule enablement |
 | `text.print_bridge_*_*` | Text | Current value | Sender/folder filters, booklet patterns, queue/archive folders, and schedule fields |
 | `button.print_bridge_*_print_test_page` | Button | — | Sends a built-in one-page PDF to the printer |
 | `button.print_bridge_*_check_filter` | Button | — | Scans the mailbox and updates `filter_preview` sensor |
+| `button.print_bridge_*_check_signal_groups` | Button | — | Queries the Signal REST module and updates `signal_groups` sensor |
+| `button.print_bridge_*_confirm_signal_*` | Button | — | Confirms one of the first five pending Signal document jobs |
 | `button.print_bridge_*_cancel_queued_jobs` | Button | — | Cancels schedule-held jobs, printer-busy retry jobs, and queued PDFs that have not been submitted |
 
 *`*` is a slug derived from the printer's CUPS queue name.*
@@ -456,6 +489,28 @@ UID from the Lovelace email table or the `filter_preview` sensor.
 | `orientation` | no | `portrait` or `landscape`; booklet jobs force `landscape` |
 | `media` | no | IPP media keyword, such as `iso_a4_210x297mm` |
 | `raster_dpi` | no | Direct IPP raster conversion DPI, 72-600. Lower is faster; default is `150`. |
+
+### Signal services
+
+Signal intake creates pending jobs only. A received Signal document is printed
+after one of these confirmation paths succeeds:
+
+| Service | Description |
+|---|---|
+| `print_bridge.confirm_signal_job` | Confirm and print a pending Signal job by `job_id` or `token`. |
+| `print_bridge.cancel_signal_job` | Cancel a pending Signal job by `job_id` or `token`. |
+| `print_bridge.check_signal_groups` | Query the Signal REST module and expose exact group IDs in the Signal Groups sensor. |
+
+Signal reply commands are available when confirmation mode includes Signal:
+
+```text
+print <token>
+cancel <token>
+```
+
+Each confirmed Signal job uses the same conversion, merge, booklet, reverse
+order, collate, direct IPP/CUPS, busy-printer retry, audit, and notification
+pipeline as email and folder jobs.
 
 ### Mail print parameters
 
@@ -739,7 +794,7 @@ A: `http://<cups-host>:631`. When using the CUPS add-on on HA OS with host netwo
 Pull requests are welcome. Please open an issue first for significant changes.
 
 ```bash
-./venv/bin/pytest tests/ -v   # 179 tests, no external dependencies required
+./venv/bin/pytest tests/ -v   # 205 tests, no external dependencies required
 ```
 
 ---

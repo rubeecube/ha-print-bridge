@@ -34,6 +34,14 @@ CONF_STATUS_REPLY_NOTIFY_SERVICE = "status_reply_notify_service"
 CONF_RASTER_DPI = "raster_dpi"                     # direct IPP raster conversion DPI
 CONF_REVERSE_ORDER = "reverse_order"               # reverse one-sided page order
 CONF_COLLATE = "collate"                           # collate multi-copy jobs
+CONF_SIGNAL_ENABLED = "signal_enabled"             # receive Signal document attachments
+CONF_SIGNAL_MODULE_ID = "signal_module_id"
+CONF_SIGNAL_REST_URL = "signal_rest_url"
+CONF_SIGNAL_ACCOUNT = "signal_account"
+CONF_SIGNAL_ALLOWED_SENDERS = "signal_allowed_senders"
+CONF_SIGNAL_ALLOWED_GROUP_IDS = "signal_allowed_group_ids"
+CONF_SIGNAL_CONFIRMATION_MODE = "signal_confirmation_mode"
+CONF_SIGNAL_CONFIRMATION_TTL_HOURS = "signal_confirmation_ttl_hours"
 CONF_SCHEDULE_ENABLED = "schedule_enabled"         # enable print time window
 CONF_SCHEDULE_START = "schedule_start"             # "HH:MM" — start of allowed window
 CONF_SCHEDULE_END = "schedule_end"                 # "HH:MM" — end of allowed window
@@ -59,6 +67,14 @@ DEFAULT_STATUS_REPLY_NOTIFY_SERVICE = ""
 DEFAULT_RASTER_DPI = 150
 DEFAULT_REVERSE_ORDER = True
 DEFAULT_COLLATE = True
+DEFAULT_SIGNAL_ENABLED = False
+DEFAULT_SIGNAL_MODULE_ID = "019ef0ac-4dcf-72b2-b5ec-3ff077450a00"
+DEFAULT_SIGNAL_REST_URL = ""
+DEFAULT_SIGNAL_ACCOUNT = ""
+DEFAULT_SIGNAL_ALLOWED_SENDERS: tuple[str, ...] = ()
+DEFAULT_SIGNAL_ALLOWED_GROUP_IDS: tuple[str, ...] = ()
+DEFAULT_SIGNAL_CONFIRMATION_MODE = "ha_and_signal"
+DEFAULT_SIGNAL_CONFIRMATION_TTL_HOURS = 24
 DEFAULT_SCHEDULE_ENABLED = False
 DEFAULT_AUTO_PRINT_ENABLED = True  # enabled by default; set False on first install
 DEFAULT_SCHEDULE_START = "07:00"
@@ -74,6 +90,12 @@ EMAIL_ACTIONS: dict[str, str] = {
     "mark_seen": "Mark as read",
     "move": "Move to archive folder",
     "delete": "Delete from server",
+}
+
+SIGNAL_CONFIRMATION_MODES: dict[str, str] = {
+    "ha_and_signal": "Home Assistant and Signal",
+    "ha_only": "Home Assistant only",
+    "signal_only": "Signal reply only",
 }
 
 # Human-readable labels for duplex mode selector
@@ -94,6 +116,9 @@ SERVICE_CHECK_FILTER = "check_filter"
 SERVICE_CHECK_PRINTER_CAPABILITIES = "check_printer_capabilities"
 SERVICE_RETRY_JOB = "retry_job"
 SERVICE_PRINT_EMAIL = "print_email"
+SERVICE_CONFIRM_SIGNAL_JOB = "confirm_signal_job"
+SERVICE_CANCEL_SIGNAL_JOB = "cancel_signal_job"
+SERVICE_CHECK_SIGNAL_GROUPS = "check_signal_groups"
 
 FIELD_FILE_PATH = "file_path"
 FIELD_DUPLEX = "duplex"
@@ -108,11 +133,14 @@ SENSOR_JOB_LOG = "job_log"
 SENSOR_FILTER_PREVIEW = "filter_preview"
 SENSOR_PRINTER_CAPABILITIES = "printer_capabilities"
 SENSOR_PENDING_JOBS = "pending_jobs"
+SENSOR_SIGNAL_PENDING_JOBS = "signal_pending_jobs"
+SENSOR_SIGNAL_GROUPS = "signal_groups"
 BINARY_SENSOR_PRINTER_ONLINE = "printer_online"
 SELECT_IMAP_ACCOUNT = "imap_account"
 SELECT_TARGET_PRINTER = "target_printer"
 SELECT_DUPLEX_MODE = "default_duplex_mode"
 SELECT_EMAIL_ACTION = "email_action_after_print"
+SELECT_SIGNAL_CONFIRMATION_MODE = "signal_confirmation_mode"
 SWITCH_AUTO_PRINT_ENABLED = "auto_print"
 SWITCH_AUTO_DELETE = "delete_after_printing"
 SWITCH_NOTIFY_ON_FAILURE = "notify_on_failure"
@@ -120,12 +148,18 @@ SWITCH_NOTIFY_ON_SUCCESS = "notify_on_success"
 SWITCH_STATUS_REPLY_ENABLED = "status_reply_enabled"
 SWITCH_SCHEDULE_ENABLED = "print_schedule"
 SWITCH_REVERSE_ORDER = "reverse_one_sided_order"
+SWITCH_SIGNAL_ENABLED = "signal_intake"
 TEXT_ALLOWED_SENDERS = "allowed_senders"
 TEXT_FOLDER_FILTER = "folder_filter"
 TEXT_BOOKLET_PATTERNS = "booklet_patterns"
 TEXT_QUEUE_FOLDER = "queue_folder"
 TEXT_EMAIL_ARCHIVE_FOLDER = "email_archive_folder"
 TEXT_STATUS_REPLY_NOTIFY_SERVICE = "status_reply_notify_service"
+TEXT_SIGNAL_MODULE_ID = "signal_module_id"
+TEXT_SIGNAL_REST_URL = "signal_rest_url"
+TEXT_SIGNAL_ACCOUNT = "signal_account"
+TEXT_SIGNAL_ALLOWED_SENDERS = "signal_allowed_senders"
+TEXT_SIGNAL_ALLOWED_GROUP_IDS = "signal_allowed_group_ids"
 TEXT_SCHEDULE_START = "schedule_start"
 TEXT_SCHEDULE_END = "schedule_end"
 TEXT_SCHEDULE_DAYS = "schedule_days"
@@ -136,6 +170,9 @@ BUTTON_CHECK_PRINTER_CAPABILITIES = "check_printer_capabilities"
 BUTTON_RETRY_LAST_FAILED = "retry_last_failed"
 BUTTON_FLUSH_PENDING = "flush_pending"
 BUTTON_CANCEL_QUEUED_JOBS = "cancel_queued_jobs"
+BUTTON_CHECK_SIGNAL_GROUPS = "check_signal_groups"
+BUTTON_CONFIRM_SIGNAL_PREFIX = "confirm_signal"
+BUTTON_CONFIRM_SIGNAL_SLOTS = 5
 BUTTON_PRINT_EMAIL_PREFIX = "print_email"
 BUTTON_PRINT_EMAIL_SLOTS = 5
 

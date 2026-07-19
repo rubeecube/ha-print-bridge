@@ -58,6 +58,14 @@
           "raster_dpi": "Raster DPI",
           "reverse_order": "Reverse one-sided page order",
           "collate": "Collate copies",
+          "signal_enabled": "Enable Signal intake",
+          "signal_module_id": "Signal Module ID",
+          "signal_rest_url": "Signal REST URL",
+          "signal_account": "Signal Account / Number",
+          "signal_allowed_senders": "Signal Allowed Senders",
+          "signal_allowed_group_ids": "Signal Allowed Group IDs",
+          "signal_confirmation_mode": "Signal Confirmation Mode",
+          "signal_confirmation_ttl_hours": "Signal Confirmation TTL (hours)",
           "email_action_after_print": "Email Action after Printing",
           "email_archive_folder": "Archive Folder (for Move action)",
           "notify_on_failure": "Notify when print fails",
@@ -80,6 +88,14 @@
           "raster_dpi": "DPI used only when direct IPP printing must convert PDFs to PWG Raster or JPEG. Lower values are faster and create smaller jobs; 150 is the fast default.",
           "reverse_order": "When enabled, one-sided jobs are submitted last page first so page 1 ends on top. Duplex and booklet jobs keep their imposed page order.",
           "collate": "When enabled, multi-copy jobs are requested as collated copies by default.",
+          "signal_enabled": "When ON, Print Bridge receives Signal document attachments from the configured Signal REST module and waits for confirmation before printing.",
+          "signal_module_id": "Identifier of the Signal module used by this integration. Default: 019ef0ac-4dcf-72b2-b5ec-3ff077450a00.",
+          "signal_rest_url": "Base URL of the signal-cli-rest-api compatible module, for example http://homeassistant.local:8080.",
+          "signal_account": "Registered Signal account/phone number used by the Signal REST module.",
+          "signal_allowed_senders": "Trusted Signal phone numbers or UUIDs, one per line. Signal documents from other senders are ignored unless their group is allowed.",
+          "signal_allowed_group_ids": "Trusted Signal group IDs, one per line. Use Check Signal Groups to discover exact IDs.",
+          "signal_confirmation_mode": "How pending Signal document jobs can be confirmed.",
+          "signal_confirmation_ttl_hours": "How long pending Signal document confirmations remain valid before expiring.",
           "email_action_after_print": "What to do with the email in your mailbox after the PDF is printed.",
           "email_archive_folder": "IMAP folder to move emails to when 'Move to archive folder' is selected (e.g. INBOX/Printed). Created automatically by most servers.",
           "notify_on_failure": "Send a Home Assistant notification when a print job fails.",
@@ -102,7 +118,9 @@
       "job_log":        { "name": "Job Log" },
       "filter_preview": { "name": "Filter Preview" },
       "printer_capabilities": { "name": "Printer Capabilities" },
-      "pending_jobs":   { "name": "Scheduled Queue" }
+      "pending_jobs":   { "name": "Scheduled Queue" },
+      "signal_pending_jobs": { "name": "Signal Pending Jobs" },
+      "signal_groups": { "name": "Signal Groups" }
     },
     "binary_sensor": {
       "printer_online": { "name": "Printer Online" }
@@ -111,7 +129,8 @@
       "imap_account":             { "name": "IMAP Account" },
       "target_printer":           { "name": "Target Printer" },
       "default_duplex_mode":      { "name": "Default Duplex Mode" },
-      "email_action_after_print": { "name": "Email Action after Print" }
+      "email_action_after_print": { "name": "Email Action after Print" },
+      "signal_confirmation_mode": { "name": "Signal Confirmation Mode" }
     },
     "switch": {
       "auto_print":            { "name": "Auto Print" },
@@ -120,6 +139,7 @@
       "notify_on_success":     { "name": "Notify on Success" },
       "status_reply_enabled":  { "name": "Status Reply" },
       "reverse_one_sided_order": { "name": "Reverse One-sided Order" },
+      "signal_intake":         { "name": "Signal Intake" },
       "print_schedule":        { "name": "Print Schedule" }
     },
     "text": {
@@ -129,6 +149,11 @@
       "queue_folder":          { "name": "Queue Folder" },
       "email_archive_folder":  { "name": "Email Archive Folder" },
       "status_reply_notify_service": { "name": "Status Reply Notify Service" },
+      "signal_module_id":      { "name": "Signal Module ID" },
+      "signal_rest_url":       { "name": "Signal REST URL" },
+      "signal_account":        { "name": "Signal Account" },
+      "signal_allowed_senders": { "name": "Signal Allowed Senders" },
+      "signal_allowed_group_ids": { "name": "Signal Allowed Group IDs" },
       "schedule_start":        { "name": "Schedule Start" },
       "schedule_end":          { "name": "Schedule End" },
       "schedule_days":         { "name": "Schedule Days" },
@@ -140,7 +165,8 @@
       "check_printer_capabilities": { "name": "Check Printer Capabilities" },
       "retry_last_failed":  { "name": "Retry Last Failed Job" },
       "flush_pending":      { "name": "Print Queued Jobs Now" },
-      "cancel_queued_jobs": { "name": "Cancel Queued Jobs" }
+      "cancel_queued_jobs": { "name": "Cancel Queued Jobs" },
+      "check_signal_groups": { "name": "Check Signal Groups" }
     }
   }
 }

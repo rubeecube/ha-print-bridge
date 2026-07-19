@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.30] — 2026-07-19
+
+### Added
+
+- **Signal document intake with confirmation** — receive printable Signal document attachments from a signal-cli-rest-api compatible module, queue them as pending jobs, and print only after confirmation.
+- **Signal group filtering** — configure trusted Signal senders and exact group IDs, and discover groups with the new Signal Groups sensor/service.
+- **Signal confirmation controls** — confirm or cancel pending Signal jobs from Home Assistant services/buttons or by replying `print <token>` / `cancel <token>` in Signal.
+- **Signal status replies and audit metadata** — report Signal source, group, attachments, skipped files, print result, and effective print settings through sensors, history, events, and Signal replies.
+
+### Changed
+
+- Documentation now covers Signal-to-printer setup, group ID filtering, confirmation flow, and service usage.
+- Bumped package metadata to `0.1.30`.
+
+---
+
 ## [0.1.24] — 2026-05-15
 
 ### Added

@@ -17,15 +17,19 @@ from .const import (
     CONF_DUPLEX_MODE,
     CONF_EMAIL_ACTION,
     CONF_PRINTER_NAME,
+    CONF_SIGNAL_CONFIRMATION_MODE,
     DEFAULT_DUPLEX_MODE,
     DEFAULT_EMAIL_ACTION,
+    DEFAULT_SIGNAL_CONFIRMATION_MODE,
     DOMAIN,
     DUPLEX_MODES,
     EMAIL_ACTIONS,
     SELECT_DUPLEX_MODE,
     SELECT_EMAIL_ACTION,
     SELECT_IMAP_ACCOUNT,
+    SELECT_SIGNAL_CONFIRMATION_MODE,
     SELECT_TARGET_PRINTER,
+    SIGNAL_CONFIRMATION_MODES,
 )
 from .coordinator import AutoPrintCoordinator
 from .sensor import _device_info
@@ -54,6 +58,13 @@ _OPTION_SELECTS: tuple[_OptionSelect, ...] = (
         DEFAULT_EMAIL_ACTION,
         EMAIL_ACTIONS,
         "mdi:email-arrow-right-outline",
+    ),
+    _OptionSelect(
+        CONF_SIGNAL_CONFIRMATION_MODE,
+        SELECT_SIGNAL_CONFIRMATION_MODE,
+        DEFAULT_SIGNAL_CONFIRMATION_MODE,
+        SIGNAL_CONFIRMATION_MODES,
+        "mdi:message-check-outline",
     ),
 )
 

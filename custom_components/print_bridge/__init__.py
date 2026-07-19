@@ -32,7 +32,10 @@ from .const import (
     CONF_AUTO_PRINT_ENABLED,
     SERVICE_CHECK_FILTER,
     SERVICE_CHECK_PRINTER_CAPABILITIES,
+    SERVICE_CHECK_SIGNAL_GROUPS,
     SERVICE_CLEAR_QUEUE,
+    SERVICE_CANCEL_SIGNAL_JOB,
+    SERVICE_CONFIRM_SIGNAL_JOB,
     SERVICE_PRINT_EMAIL,
     SERVICE_PRINT_FILE,
     SERVICE_PROCESS_IMAP_MESSAGE,
@@ -111,6 +114,13 @@ _PROCESS_IMAP_MESSAGE_SCHEMA = vol.Schema(
         vol.Optional("sender"): cv.string,
         vol.Optional("mail_subject"): cv.string,
         vol.Optional("mail_text"): cv.string,
+    }
+)
+
+_SIGNAL_JOB_SCHEMA = vol.Schema(
+    {
+        vol.Optional("job_id"): cv.string,
+        vol.Optional("token"): cv.string,
     }
 )
 
@@ -220,6 +230,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) ->
         except Exception:
             logger.debug("Could not create setup notification", exc_info=True)
 
+    await coordinator.async_sync_signal_receiver()
+
     # Subscribe to imap_content events from HA's built-in IMAP integration.
     entry.async_on_unload(
         hass.bus.async_listen("imap_content", coordinator.async_handle_imap_event)
@@ -254,6 +266,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -
     """Unload a config entry."""
     if entry.runtime_data is not None:
         await entry.runtime_data.async_cancel_printer_busy_queue_task()
+        await entry.runtime_data.async_cancel_signal_receiver_task()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
@@ -272,6 +285,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -
                 SERVICE_CHECK_FILTER,
                 SERVICE_CHECK_PRINTER_CAPABILITIES,
                 SERVICE_RETRY_JOB, SERVICE_PRINT_EMAIL,
+                SERVICE_CONFIRM_SIGNAL_JOB, SERVICE_CANCEL_SIGNAL_JOB,
+                SERVICE_CHECK_SIGNAL_GROUPS,
             ):
                 hass.services.async_remove(DOMAIN, svc)
 
@@ -281,6 +296,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -
 async def _async_update_listener(hass: HomeAssistant, entry: AutoPrintConfigEntry) -> None:
     """Refresh entities after options change."""
     if entry.runtime_data is not None and entry.runtime_data.data is not None:
+        await entry.runtime_data.async_sync_signal_receiver()
         entry.runtime_data.async_set_updated_data(entry.runtime_data.data)
 
 
@@ -611,6 +627,67 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("reverse_order"): cv.boolean,
             }
         ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def _handle_confirm_signal_job(call: ServiceCall) -> dict:
+        coordinator = _get_any_coordinator(hass).selected_printer_coordinator
+        job_id = call.data.get("job_id")
+        token = call.data.get("token")
+        if not job_id and not token:
+            raise HomeAssistantError("Provide either job_id or token.")
+        result = await coordinator.async_confirm_signal_job(
+            job_id=job_id,
+            token=token,
+        )
+        return {
+            "job_id": result.signal_job_id,
+            "filename": result.filename,
+            "success": result.success,
+            "error": result.error,
+            "status_code": result.status_code,
+            "status": result.status,
+            "attachments": list(result.attachments),
+            "skipped_attachments": list(result.skipped_attachments),
+            "merged_attachment_count": result.merged_attachment_count,
+        }
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CONFIRM_SIGNAL_JOB,
+        _handle_confirm_signal_job,
+        schema=_SIGNAL_JOB_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def _handle_cancel_signal_job(call: ServiceCall) -> dict:
+        coordinator = _get_any_coordinator(hass).selected_printer_coordinator
+        job_id = call.data.get("job_id")
+        token = call.data.get("token")
+        if not job_id and not token:
+            raise HomeAssistantError("Provide either job_id or token.")
+        return await coordinator.async_cancel_signal_job(
+            job_id=job_id,
+            token=token,
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CANCEL_SIGNAL_JOB,
+        _handle_cancel_signal_job,
+        schema=_SIGNAL_JOB_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def _handle_check_signal_groups(call: ServiceCall) -> dict:
+        coordinator = _get_any_coordinator(hass).selected_printer_coordinator
+        groups = await coordinator.async_check_signal_groups()
+        return {"groups": groups, "count": len(groups)}
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CHECK_SIGNAL_GROUPS,
+        _handle_check_signal_groups,
         supports_response=SupportsResponse.OPTIONAL,
     )
 

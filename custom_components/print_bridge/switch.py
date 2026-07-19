@@ -17,6 +17,7 @@ from .const import (
     CONF_NOTIFY_ON_SUCCESS,
     CONF_REVERSE_ORDER,
     CONF_SCHEDULE_ENABLED,
+    CONF_SIGNAL_ENABLED,
     CONF_STATUS_REPLY_ENABLED,
     DEFAULT_AUTO_DELETE,
     DEFAULT_AUTO_PRINT_ENABLED,
@@ -24,6 +25,7 @@ from .const import (
     DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_REVERSE_ORDER,
     DEFAULT_SCHEDULE_ENABLED,
+    DEFAULT_SIGNAL_ENABLED,
     DEFAULT_STATUS_REPLY_ENABLED,
     SWITCH_AUTO_DELETE,
     SWITCH_AUTO_PRINT_ENABLED,
@@ -31,6 +33,7 @@ from .const import (
     SWITCH_NOTIFY_ON_SUCCESS,
     SWITCH_REVERSE_ORDER,
     SWITCH_SCHEDULE_ENABLED,
+    SWITCH_SIGNAL_ENABLED,
     SWITCH_STATUS_REPLY_ENABLED,
 )
 from .coordinator import AutoPrintCoordinator
@@ -81,6 +84,12 @@ _SWITCHES: tuple[_OptionSwitch, ...] = (
         SWITCH_REVERSE_ORDER,
         DEFAULT_REVERSE_ORDER,
         "mdi:sort-descending",
+    ),
+    _OptionSwitch(
+        CONF_SIGNAL_ENABLED,
+        SWITCH_SIGNAL_ENABLED,
+        DEFAULT_SIGNAL_ENABLED,
+        "mdi:message-text-lock-outline",
     ),
     _OptionSwitch(
         CONF_SCHEDULE_ENABLED,
