@@ -19,6 +19,7 @@ import io
 import logging
 import os
 import re
+import secrets
 import smtplib
 import time
 from dataclasses import dataclass, field, replace
@@ -64,6 +65,14 @@ from .const import (
     CONF_QUEUE_FOLDER,
     CONF_RASTER_DPI,
     CONF_REVERSE_ORDER,
+    CONF_SIGNAL_ACCOUNT,
+    CONF_SIGNAL_ALLOWED_GROUP_IDS,
+    CONF_SIGNAL_ALLOWED_SENDERS,
+    CONF_SIGNAL_CONFIRMATION_MODE,
+    CONF_SIGNAL_CONFIRMATION_TTL_HOURS,
+    CONF_SIGNAL_ENABLED,
+    CONF_SIGNAL_MODULE_ID,
+    CONF_SIGNAL_REST_URL,
     CONF_AUTO_PRINT_ENABLED,
     CONF_SELECTED_IMAP_ENTRY_ID,
     CONF_SELECTED_PRINTER_ENTRY_ID,
@@ -84,6 +93,14 @@ from .const import (
     DEFAULT_QUEUE_FOLDER,
     DEFAULT_RASTER_DPI,
     DEFAULT_REVERSE_ORDER,
+    DEFAULT_SIGNAL_ACCOUNT,
+    DEFAULT_SIGNAL_ALLOWED_GROUP_IDS,
+    DEFAULT_SIGNAL_ALLOWED_SENDERS,
+    DEFAULT_SIGNAL_CONFIRMATION_MODE,
+    DEFAULT_SIGNAL_CONFIRMATION_TTL_HOURS,
+    DEFAULT_SIGNAL_ENABLED,
+    DEFAULT_SIGNAL_MODULE_ID,
+    DEFAULT_SIGNAL_REST_URL,
     DEFAULT_AUTO_PRINT_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
     DEFAULT_SCHEDULE_DAYS,
@@ -112,6 +129,12 @@ from .print_handler import (
     sanitize_ipp_job_name,
 )
 from .raster_converter import convert_pdf_to_jpeg, convert_pdf_to_pwg_raster
+from .signal_client import (
+    SignalAttachment,
+    SignalMessage,
+    SignalRestClient,
+    parse_signal_messages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +144,7 @@ _PRINT_JOB_TIMEOUT_SECONDS = 300
 _PRINTER_BUSY_POLL_INTERVAL_SECONDS = 15
 _PRINTER_BUSY_QUEUE_MAX_ATTEMPTS = 120
 _PRINTER_BUSY_STATUS_CODES = {0x0506, 0x0507}
+_SIGNAL_POLL_INTERVAL_SECONDS = 30
 _QUEUE_FILE_STABLE_SECONDS = 2
 _QUEUE_IGNORED_SUFFIXES = (".tmp", ".part", ".crdownload")
 _TEXT_FILTER_SPLIT_RE = re.compile(r"[,;\n]+")
@@ -164,6 +188,22 @@ _MEDIA_BY_POINTS = (
     ("na_letter_8.5x11in", 612, 792),
     ("na_legal_8.5x14in", 612, 1008),
 )
+_SIGNAL_CONFIRM_RE = re.compile(
+    r"(?i)^\s*(?:print|confirm|yes)\s+(?P<token>[a-z0-9_-]{4,64})\b"
+)
+_SIGNAL_CANCEL_RE = re.compile(
+    r"(?i)^\s*(?:cancel|stop|no)\s+(?P<token>[a-z0-9_-]{4,64})\b"
+)
+_SIGNAL_OPTION_KEYS = {
+    CONF_SIGNAL_ENABLED,
+    CONF_SIGNAL_MODULE_ID,
+    CONF_SIGNAL_REST_URL,
+    CONF_SIGNAL_ACCOUNT,
+    CONF_SIGNAL_ALLOWED_SENDERS,
+    CONF_SIGNAL_ALLOWED_GROUP_IDS,
+    CONF_SIGNAL_CONFIRMATION_MODE,
+    CONF_SIGNAL_CONFIRMATION_TTL_HOURS,
+}
 
 
 def _decode_mime_filename(value: str) -> str:
@@ -199,6 +239,21 @@ def _normalise_email_address(value: str) -> str:
     """Return a lower-case bare email address from an IMAP sender string."""
     _name, address = parseaddr(value or "")
     return (address or value or "").strip().lower()
+
+
+def _normalise_signal_identity(value: str) -> str:
+    """Return a stable comparison key for Signal numbers and UUIDs."""
+    return str(value or "").strip().lower()
+
+
+def _normalise_signal_group_id(value: str) -> str:
+    """Return group IDs in the signal-cli-rest-api recipient format."""
+    group_id = str(value or "").strip()
+    if not group_id:
+        return ""
+    if group_id.lower().startswith("group."):
+        return "group." + group_id.split(".", 1)[1]
+    return f"group.{group_id}"
 
 
 def _split_notify_service(value: str) -> tuple[str, str]:
@@ -498,6 +553,10 @@ class PrintJobResult:
     status_reply_subject: str | None = None
     status_reply_message: str | None = None
     status_reply_delivery: str | None = None
+    source: str | None = None
+    signal_job_id: str | None = None
+    signal_group_id: str | None = None
+    signal_group_name: str | None = None
     timestamp: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
@@ -660,6 +719,77 @@ class BusyPrintJob:
         }
 
 
+@dataclass
+class SignalPendingJob:
+    """A received Signal document job waiting for explicit confirmation."""
+
+    job_id: str
+    token: str
+    message_id: str
+    sender: str
+    sender_name: str | None
+    sender_uuid: str | None
+    group_id: str | None
+    group_name: str | None
+    text: str
+    attachments: tuple[SignalAttachment, ...]
+    skipped_attachments: list[str] = field(default_factory=list)
+    duplex_override: str | None = None
+    booklet_override: bool | None = None
+    copies: int | None = None
+    collate: bool | None = None
+    orientation: str | None = None
+    media: str | None = None
+    raster_dpi: int | None = None
+    reverse_order: bool | None = None
+    received_at: str = field(
+        default_factory=lambda: datetime.now().isoformat(timespec="seconds")
+    )
+    expires_at: str = ""
+
+    @property
+    def filename(self) -> str:
+        if len(self.attachments) == 1:
+            return self.attachments[0].filename
+        return f"signal_{self.message_id[:24]}_attachments.pdf"
+
+    @property
+    def reply_recipient(self) -> str | None:
+        return self.group_id or self.sender or self.sender_uuid
+
+    def as_dict(self) -> dict:
+        return {
+            "job_id": self.job_id,
+            "token": self.token,
+            "filename": self.filename,
+            "sender": self.sender,
+            "sender_name": self.sender_name,
+            "sender_uuid": self.sender_uuid,
+            "group_id": self.group_id,
+            "group_name": self.group_name,
+            "message_id": self.message_id,
+            "received_at": self.received_at,
+            "expires_at": self.expires_at,
+            "duplex": self.duplex_override,
+            "booklet": self.booklet_override,
+            "copies": self.copies,
+            "collate": self.collate,
+            "orientation": self.orientation,
+            "media": self.media,
+            "raster_dpi": self.raster_dpi,
+            "reverse_order": self.reverse_order,
+            "attachments": [
+                {
+                    "filename": item.filename,
+                    "content_type": item.content_type,
+                    "attachment_id": item.attachment_id,
+                }
+                for item in self.attachments
+            ],
+            "skipped_attachments": list(self.skipped_attachments),
+        }
+
+
 @dataclass(frozen=True)
 class QueueFolderFile:
     """A stable supported file found in the configured queue folder."""
@@ -682,6 +812,9 @@ class AutoPrintData:
     printer_capabilities: PrinterCapabilities | None = None
     pending_jobs: list[PendingJob] = field(default_factory=list)
     printer_busy_jobs: list[BusyPrintJob] = field(default_factory=list)
+    signal_pending_jobs: list[SignalPendingJob] = field(default_factory=list)
+    signal_groups: list[dict[str, Any]] = field(default_factory=list)
+    signal_groups_checked_at: str | None = None
 
 
 class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
@@ -703,8 +836,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self._pending_jobs: list[PendingJob] = []
         self._printer_busy_jobs: list[BusyPrintJob] = []
         self._printer_busy_queue_task: asyncio.Task | None = None
+        self._signal_receiver_task: asyncio.Task | None = None
         self._processing_queue_files: set[str] = set()
         self._processed_queue_files: dict[str, float] = {}
+        self._signal_pending_jobs: list[SignalPendingJob] = []
+        self._signal_seen_keys: set[str] = set()
+        self._signal_groups: list[dict[str, Any]] = []
+        self._signal_groups_checked_at: str | None = None
         self._last_schedule_state: bool | None = None  # track open↔closed transitions
         # Deduplication: maps "uid:part_key" → datetime of last print to prevent
         # multiple blueprints firing on the same attachment from double-printing.
@@ -916,6 +1054,94 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self.hass.config_entries.async_update_entry(self._entry, options=options)
         if self.data is not None:
             self.async_set_updated_data(self.data)
+        if key in _SIGNAL_OPTION_KEYS:
+            self.hass.async_create_task(self.async_sync_signal_receiver())
+
+    @property
+    def _signal_enabled(self) -> bool:
+        return bool(
+            self._entry.options.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED)
+        )
+
+    @property
+    def _signal_module_id(self) -> str:
+        return str(
+            self._entry.options.get(CONF_SIGNAL_MODULE_ID, DEFAULT_SIGNAL_MODULE_ID)
+            or DEFAULT_SIGNAL_MODULE_ID
+        ).strip()
+
+    @property
+    def _signal_rest_url(self) -> str:
+        return str(
+            self._entry.options.get(CONF_SIGNAL_REST_URL, DEFAULT_SIGNAL_REST_URL)
+            or ""
+        ).strip().rstrip("/")
+
+    @property
+    def _signal_account(self) -> str:
+        return str(
+            self._entry.options.get(CONF_SIGNAL_ACCOUNT, DEFAULT_SIGNAL_ACCOUNT)
+            or ""
+        ).strip()
+
+    @property
+    def _signal_allowed_senders(self) -> set[str]:
+        values = self._entry.options.get(
+            CONF_SIGNAL_ALLOWED_SENDERS, DEFAULT_SIGNAL_ALLOWED_SENDERS
+        )
+        return {
+            _normalise_signal_identity(str(value))
+            for value in values
+            if _normalise_signal_identity(str(value))
+        }
+
+    @property
+    def _signal_allowed_group_ids(self) -> set[str]:
+        values = self._entry.options.get(
+            CONF_SIGNAL_ALLOWED_GROUP_IDS, DEFAULT_SIGNAL_ALLOWED_GROUP_IDS
+        )
+        return {
+            _normalise_signal_group_id(str(value))
+            for value in values
+            if _normalise_signal_group_id(str(value))
+        }
+
+    @property
+    def _signal_confirmation_mode(self) -> str:
+        return str(
+            self._entry.options.get(
+                CONF_SIGNAL_CONFIRMATION_MODE, DEFAULT_SIGNAL_CONFIRMATION_MODE
+            )
+            or DEFAULT_SIGNAL_CONFIRMATION_MODE
+        )
+
+    @property
+    def _signal_confirmation_ttl(self) -> timedelta:
+        try:
+            hours = int(
+                self._entry.options.get(
+                    CONF_SIGNAL_CONFIRMATION_TTL_HOURS,
+                    DEFAULT_SIGNAL_CONFIRMATION_TTL_HOURS,
+                )
+            )
+        except (TypeError, ValueError):
+            hours = DEFAULT_SIGNAL_CONFIRMATION_TTL_HOURS
+        return timedelta(hours=max(1, min(168, hours)))
+
+    @property
+    def _signal_reply_enabled(self) -> bool:
+        return self._signal_confirmation_mode in {"ha_and_signal", "signal_only"}
+
+    def _signal_client(self) -> SignalRestClient:
+        if not self._signal_rest_url or not self._signal_account:
+            raise RuntimeError(
+                "Signal REST URL and Signal account must be configured first."
+            )
+        return SignalRestClient(
+            async_get_clientsession(self.hass),
+            base_url=self._signal_rest_url,
+            account=self._signal_account,
+        )
 
     @property
     def _schedule_days(self) -> list[str]:
@@ -1012,6 +1238,544 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     @property
     def _notify_on_success(self) -> bool:
         return bool(self._entry.options.get(CONF_NOTIFY_ON_SUCCESS, DEFAULT_NOTIFY_ON_SUCCESS))
+
+    # ------------------------------------------------------------------
+    # Signal intake
+    # ------------------------------------------------------------------
+
+    async def async_sync_signal_receiver(self) -> None:
+        """Start or stop the Signal receive loop based on current options."""
+        configured = bool(
+            self._signal_enabled and self._signal_rest_url and self._signal_account
+        )
+        task_running = (
+            self._signal_receiver_task is not None
+            and not self._signal_receiver_task.done()
+        )
+        if configured and not task_running:
+            self._signal_receiver_task = self.hass.async_create_task(
+                self._async_signal_receiver_loop()
+            )
+            logger.info(
+                "Started Signal receiver for module %s at %s",
+                self._signal_module_id,
+                self._signal_rest_url,
+            )
+        elif not configured and task_running:
+            await self.async_cancel_signal_receiver_task()
+
+    async def async_cancel_signal_receiver_task(self) -> None:
+        """Cancel the background Signal receive loop during unload/reconfigure."""
+        if (
+            self._signal_receiver_task is None
+            or self._signal_receiver_task.done()
+        ):
+            return
+        self._signal_receiver_task.cancel()
+        try:
+            await self._signal_receiver_task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._signal_receiver_task = None
+
+    async def _async_signal_receiver_loop(self) -> None:
+        """Poll/stream the Signal REST module and queue documents for confirmation."""
+        while self._signal_enabled and self._signal_rest_url and self._signal_account:
+            try:
+                client = self._signal_client()
+                payload = await client.receive()
+                await self.async_process_signal_payload(payload, client=client)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Signal receive failed: %s", exc)
+            await asyncio.sleep(_SIGNAL_POLL_INTERVAL_SECONDS)
+
+    async def async_process_signal_payload(
+        self,
+        payload: Any,
+        *,
+        client: SignalRestClient | None = None,
+    ) -> int:
+        """Process a raw Signal receive payload and return pending/command count."""
+        if not self._signal_enabled:
+            return 0
+        self._expire_signal_pending_jobs()
+        signal_client = client or self._signal_client()
+        handled = 0
+        for message in parse_signal_messages(payload):
+            if await self._async_handle_signal_command(message, signal_client):
+                handled += 1
+                continue
+            if await self._async_create_signal_pending_job(message, signal_client):
+                handled += 1
+        if handled:
+            await self.async_request_refresh()
+        return handled
+
+    def _signal_message_allowed(self, message: SignalMessage) -> bool:
+        """Return True when a Signal message is from a trusted source/group."""
+        allowed_senders = self._signal_allowed_senders
+        allowed_groups = self._signal_allowed_group_ids
+        sender_keys = {
+            _normalise_signal_identity(message.sender),
+            _normalise_signal_identity(message.sender_uuid or ""),
+        }
+        sender_allowed = bool(allowed_senders & sender_keys)
+        group_allowed = bool(
+            message.group_id
+            and _normalise_signal_group_id(message.group_id) in allowed_groups
+        )
+        return sender_allowed or group_allowed
+
+    async def _async_handle_signal_command(
+        self,
+        message: SignalMessage,
+        client: SignalRestClient,
+    ) -> bool:
+        """Handle `print <token>` or `cancel <token>` replies."""
+        text = message.text or ""
+        confirm = _SIGNAL_CONFIRM_RE.match(text)
+        cancel = _SIGNAL_CANCEL_RE.match(text)
+        if not confirm and not cancel:
+            return False
+        if not self._signal_message_allowed(message):
+            logger.info(
+                "Ignoring Signal confirmation command from untrusted source %s group=%s",
+                message.sender or message.sender_uuid,
+                message.group_id,
+            )
+            return True
+        token = (confirm or cancel).group("token")  # type: ignore[union-attr]
+        job = self._find_signal_pending_job(token=token)
+        if job is None:
+            await self._async_send_signal_message(
+                client,
+                [message.group_id or message.sender],
+                f"Print Bridge: no pending Signal job matches token {token}.",
+            )
+            return True
+        if not self._signal_command_matches_job(message, job):
+            await self._async_send_signal_message(
+                client,
+                [message.group_id or message.sender],
+                "Print Bridge: this token belongs to another Signal sender or group.",
+            )
+            return True
+        if cancel:
+            await self.async_cancel_signal_job(token=token, client=client)
+        else:
+            await self.async_confirm_signal_job(token=token, client=client)
+        return True
+
+    def _signal_command_matches_job(
+        self,
+        message: SignalMessage,
+        job: SignalPendingJob,
+    ) -> bool:
+        if job.group_id:
+            return _normalise_signal_group_id(message.group_id or "") == (
+                _normalise_signal_group_id(job.group_id)
+            )
+        message_senders = {
+            _normalise_signal_identity(message.sender),
+            _normalise_signal_identity(message.sender_uuid or ""),
+        }
+        job_senders = {
+            _normalise_signal_identity(job.sender),
+            _normalise_signal_identity(job.sender_uuid or ""),
+        }
+        return bool(message_senders & job_senders)
+
+    async def _async_create_signal_pending_job(
+        self,
+        message: SignalMessage,
+        client: SignalRestClient,
+    ) -> bool:
+        """Create a pending confirmation job for a Signal message with attachments."""
+        if not message.attachments:
+            return False
+        if not self._signal_message_allowed(message):
+            logger.info(
+                "Ignoring Signal document from untrusted source %s group=%s",
+                message.sender or message.sender_uuid,
+                message.group_id,
+            )
+            return False
+
+        mail_params = parse_mail_print_parameters("", message.text or "")
+        if mail_params.errors:
+            await self._async_send_signal_message(
+                client,
+                [message.group_id or message.sender],
+                "Print Bridge: invalid print parameters: "
+                + "; ".join(mail_params.errors),
+            )
+            return False
+
+        attachments: list[SignalAttachment] = []
+        skipped: list[str] = []
+        dedupe_parts: list[str] = []
+        for attachment in message.attachments:
+            filename = sanitize_ipp_job_name(attachment.filename)
+            content_type = attachment.content_type or ""
+            dedupe_key = (
+                f"{message.message_id}:"
+                f"{attachment.attachment_id or filename}:{content_type}"
+            )
+            dedupe_parts.append(dedupe_key)
+            if dedupe_key in self._signal_seen_keys:
+                skipped.append(f"{filename}: duplicate Signal attachment")
+                continue
+            resolved = printable_type(filename, content_type)
+            if resolved is None:
+                skipped.append(f"{filename}: unsupported file type")
+                continue
+            if not resolved.supported:
+                skipped.append(f"{filename}: {resolved.reason or 'unsupported file type'}")
+                continue
+            try:
+                data = attachment.data
+                if data is None and attachment.attachment_id:
+                    data = await client.get_attachment(attachment.attachment_id)
+                if not data:
+                    raise RuntimeError("attachment data is not available")
+            except Exception as exc:
+                skipped.append(f"{filename}: {_describe_exception(exc)}")
+                continue
+            attachments.append(
+                SignalAttachment(
+                    filename=filename,
+                    content_type=content_type,
+                    attachment_id=attachment.attachment_id,
+                    data=data,
+                )
+            )
+
+        if not attachments:
+            if skipped and self._signal_reply_enabled:
+                await self._async_send_signal_message(
+                    client,
+                    [message.group_id or message.sender],
+                    "Print Bridge: no printable Signal attachments were queued.\n"
+                    + "\n".join(f"- {item}" for item in skipped[:10]),
+                )
+            return False
+
+        job_id = secrets.token_hex(8)
+        token = secrets.token_hex(3)
+        now = datetime.now()
+        expires_at = (now + self._signal_confirmation_ttl).isoformat(
+            timespec="seconds"
+        )
+        job = SignalPendingJob(
+            job_id=job_id,
+            token=token,
+            message_id=message.message_id,
+            sender=message.sender,
+            sender_name=message.sender_name,
+            sender_uuid=message.sender_uuid,
+            group_id=message.group_id,
+            group_name=message.group_name,
+            text=message.text,
+            attachments=tuple(attachments),
+            skipped_attachments=skipped,
+            duplex_override=mail_params.duplex,
+            booklet_override=mail_params.booklet,
+            copies=mail_params.copies,
+            collate=mail_params.collate,
+            orientation=mail_params.orientation,
+            media=mail_params.media,
+            raster_dpi=mail_params.raster_dpi,
+            reverse_order=mail_params.reverse_order,
+            expires_at=expires_at,
+        )
+        self._signal_pending_jobs.append(job)
+        self._signal_seen_keys.update(dedupe_parts)
+        logger.info(
+            "Queued Signal document confirmation job %s from %s group=%s",
+            job.job_id,
+            message.sender or message.sender_uuid,
+            message.group_id,
+        )
+        await self._async_notify_signal_pending_job(job)
+        if self._signal_reply_enabled:
+            await self._async_send_signal_message(
+                client,
+                [job.reply_recipient or ""],
+                self._format_signal_pending_reply(job),
+            )
+        return True
+
+    async def _async_notify_signal_pending_job(self, job: SignalPendingJob) -> None:
+        """Create a HA notification for a pending Signal document."""
+        try:
+            await self.hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "title": "Print Bridge — Signal document waiting",
+                    "message": (
+                        f"Signal document **{job.filename}** is waiting for confirmation.\n\n"
+                        f"Sender: {job.sender or job.sender_uuid or 'unknown'}\n"
+                        f"Group: {job.group_name or job.group_id or 'direct'}\n"
+                        f"Token: `{job.token}`\n"
+                        f"Expires: {job.expires_at}\n\n"
+                        "Use service `print_bridge.confirm_signal_job` or reply "
+                        f"`print {job.token}` in Signal."
+                    ),
+                    "notification_id": f"print_bridge_signal_{job.job_id}",
+                },
+            )
+        except Exception:
+            logger.debug("Could not create Signal pending notification", exc_info=True)
+
+    def _format_signal_pending_reply(self, job: SignalPendingJob) -> str:
+        attachments = "\n".join(f"- {item.filename}" for item in job.attachments)
+        skipped = ""
+        if job.skipped_attachments:
+            skipped = "\n\nSkipped:\n" + "\n".join(
+                f"- {item}" for item in job.skipped_attachments[:10]
+            )
+        return (
+            "Print Bridge received document(s) waiting for confirmation.\n\n"
+            f"Token: {job.token}\n"
+            f"Expires: {job.expires_at}\n\n"
+            "Reply with:\n"
+            f"print {job.token}\n"
+            f"cancel {job.token}\n\n"
+            f"Attachments:\n{attachments}{skipped}"
+        )
+
+    async def async_confirm_signal_job(
+        self,
+        *,
+        job_id: str | None = None,
+        token: str | None = None,
+        client: SignalRestClient | None = None,
+    ) -> PrintJobResult:
+        """Confirm and print a pending Signal document job."""
+        self._expire_signal_pending_jobs()
+        job = self._find_signal_pending_job(job_id=job_id, token=token)
+        if job is None:
+            from homeassistant.exceptions import HomeAssistantError
+
+            raise HomeAssistantError("No matching pending Signal job found.")
+        self._signal_pending_jobs.remove(job)
+
+        summary = await self._async_convert_signal_attachments(job)
+        effective_duplex = job.duplex_override or self._duplex_mode
+        effective_booklet = (
+            job.booklet_override
+            if job.booklet_override is not None
+            else any(is_booklet_job(item.filename, self._booklet_patterns) for item in job.attachments)
+        )
+
+        if not summary.converted:
+            error = "No Signal attachments could be converted"
+            result = PrintJobResult(
+                filename=job.filename,
+                success=False,
+                error=error,
+                sender=job.sender,
+                duplex=effective_duplex,
+                booklet=bool(effective_booklet),
+                copies=job.copies or 1,
+                collate=self._resolve_collate(job.collate),
+                orientation=job.orientation,
+                media=job.media,
+                raster_dpi=job.raster_dpi,
+                reverse_order=self._resolve_reverse_order(job.reverse_order),
+                attachments=[],
+                skipped_attachments=[*job.skipped_attachments, *summary.skipped],
+                merged_attachment_count=0,
+                status=error,
+                source="signal",
+                signal_job_id=job.job_id,
+                signal_group_id=job.group_id,
+                signal_group_name=job.group_name,
+            )
+        else:
+            merged_pdf = await self.hass.async_add_executor_job(
+                merge_pdf_documents,
+                summary.converted,
+            )
+            result = await self.async_send_print_job(
+                job.filename,
+                merged_pdf,
+                effective_duplex,
+                bool(effective_booklet),
+                copies=job.copies,
+                collate=job.collate,
+                orientation=job.orientation,
+                media=job.media,
+                raster_dpi=job.raster_dpi,
+                reverse_order=job.reverse_order,
+            )
+            result.sender = job.sender
+            result.source = "signal"
+            result.signal_job_id = job.job_id
+            result.signal_group_id = job.group_id
+            result.signal_group_name = job.group_name
+            result.source_format = (
+                "mixed" if len(summary.converted) > 1 else summary.converted[0].source_format
+            )
+            result.converted_format = "application/pdf"
+            result.attachments = summary.filenames
+            result.skipped_attachments = [*job.skipped_attachments, *summary.skipped]
+            result.merged_attachment_count = len(summary.converted)
+
+        signal_client = client or (self._signal_client() if self._signal_reply_enabled else None)
+        if signal_client and self._signal_reply_enabled:
+            await self._async_send_signal_job_status(signal_client, job, result)
+        self._record_job(result)
+        await self._async_notify_job(result)
+        await self.async_request_refresh()
+        return result
+
+    async def async_cancel_signal_job(
+        self,
+        *,
+        job_id: str | None = None,
+        token: str | None = None,
+        client: SignalRestClient | None = None,
+    ) -> dict[str, Any]:
+        """Cancel a pending Signal document job."""
+        job = self._find_signal_pending_job(job_id=job_id, token=token)
+        if job is None:
+            from homeassistant.exceptions import HomeAssistantError
+
+            raise HomeAssistantError("No matching pending Signal job found.")
+        self._signal_pending_jobs.remove(job)
+        signal_client = client or (self._signal_client() if self._signal_reply_enabled else None)
+        if signal_client and self._signal_reply_enabled:
+            await self._async_send_signal_message(
+                signal_client,
+                [job.reply_recipient or ""],
+                f"Print Bridge cancelled Signal job {job.job_id}.",
+            )
+        await self.async_request_refresh()
+        return {"job_id": job.job_id, "cancelled": True}
+
+    async def _async_convert_signal_attachments(
+        self,
+        job: SignalPendingJob,
+    ) -> AttachmentConversionSummary:
+        """Convert all pending Signal attachments to PDF."""
+        summary = AttachmentConversionSummary()
+        for attachment in job.attachments:
+            try:
+                if not attachment.data:
+                    raise RuntimeError("attachment data is missing")
+                converted = await self.hass.async_add_executor_job(
+                    convert_document_to_pdf,
+                    attachment.data,
+                    attachment.filename,
+                    attachment.content_type,
+                )
+            except Exception as exc:
+                summary.skipped.append(
+                    f"{attachment.filename}: {_describe_exception(exc)}"
+                )
+                continue
+            summary.converted.append(converted)
+        return summary
+
+    def _find_signal_pending_job(
+        self,
+        *,
+        job_id: str | None = None,
+        token: str | None = None,
+    ) -> SignalPendingJob | None:
+        for job in self._signal_pending_jobs:
+            if job_id and job.job_id == job_id:
+                return job
+            if token and job.token.lower() == token.lower():
+                return job
+        return None
+
+    def _expire_signal_pending_jobs(self) -> None:
+        """Discard expired Signal jobs."""
+        if not self._signal_pending_jobs:
+            return
+        now = datetime.now()
+        active: list[SignalPendingJob] = []
+        for job in self._signal_pending_jobs:
+            try:
+                expires_at = datetime.fromisoformat(job.expires_at)
+            except ValueError:
+                expires_at = now
+            if expires_at >= now:
+                active.append(job)
+            else:
+                logger.info("Expired pending Signal job %s", job.job_id)
+        self._signal_pending_jobs = active
+
+    async def async_check_signal_groups(self) -> list[dict[str, Any]]:
+        """Fetch Signal groups from the configured Signal REST module."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        if not self._signal_rest_url or not self._signal_account:
+            raise HomeAssistantError(
+                "Configure Signal REST URL and Signal account before checking groups."
+            )
+        groups = await self._signal_client().list_groups()
+        self._signal_groups = groups
+        self._signal_groups_checked_at = datetime.now().isoformat(timespec="seconds")
+        await self.async_request_refresh()
+        return groups
+
+    async def _async_send_signal_job_status(
+        self,
+        client: SignalRestClient,
+        job: SignalPendingJob,
+        result: PrintJobResult,
+    ) -> None:
+        """Send a compact Signal status reply for a confirmed job."""
+        status = "queued" if result.status_code == "queued-busy" else (
+            "success" if result.success else "failed"
+        )
+        lines = [
+            "Print Bridge status",
+            f"Job: {result.filename}",
+            f"Result: {status}",
+            f"Status code: {result.status_code or 'n/a'}",
+            f"Status: {result.status or result.error or 'accepted'}",
+            f"Duplex: {result.duplex or 'default'}",
+            f"Booklet: {'yes' if result.booklet else 'no'}",
+            f"Copies: {result.copies or 1}",
+            f"Collate: {'yes' if result.collate else 'no'}",
+            f"Orientation: {result.orientation or 'default'}",
+            f"Media: {result.media or 'default'}",
+            f"Reverse order: {'yes' if result.reverse_order else 'no'}",
+        ]
+        if result.attachments:
+            lines.append("Printed attachments:")
+            lines.extend(f"- {item}" for item in result.attachments)
+        if result.skipped_attachments:
+            lines.append("Skipped attachments:")
+            lines.extend(f"- {item}" for item in result.skipped_attachments[:10])
+        await self._async_send_signal_message(
+            client,
+            [job.reply_recipient or ""],
+            "\n".join(lines),
+        )
+
+    async def _async_send_signal_message(
+        self,
+        client: SignalRestClient,
+        recipients: list[str | None],
+        message: str,
+    ) -> None:
+        """Send a Signal message, logging failures without breaking printing."""
+        filtered = [recipient for recipient in recipients if recipient]
+        if not filtered:
+            return
+        try:
+            await client.send_message(filtered, message)
+        except Exception as exc:
+            logger.warning("Signal status reply failed: %s", exc)
 
     # ------------------------------------------------------------------
     # IMAP event handler
@@ -2732,14 +3496,17 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         """
         pending_count = len(self._pending_jobs)
         self._pending_jobs.clear()
+        signal_count = len(self._signal_pending_jobs)
+        self._signal_pending_jobs.clear()
         busy_count = await self.async_cancel_busy_print_jobs()
         deleted_files = await self._async_delete_queue_pdfs()
-        total = pending_count + busy_count + deleted_files
+        total = pending_count + signal_count + busy_count + deleted_files
         if total:
             logger.info(
-                "Cancelled %d queued job(s): %d schedule-held, %d printer-busy, %d file-queue file(s)",
+                "Cancelled %d queued job(s): %d schedule-held, %d signal-pending, %d printer-busy, %d file-queue file(s)",
                 total,
                 pending_count,
+                signal_count,
                 busy_count,
                 deleted_files,
             )
@@ -2833,6 +3600,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     printer_capabilities=capabilities,
                     pending_jobs=list(self.data.pending_jobs),
                     printer_busy_jobs=list(self._printer_busy_jobs),
+                    signal_pending_jobs=list(self._signal_pending_jobs),
+                    signal_groups=list(self._signal_groups),
+                    signal_groups_checked_at=self._signal_groups_checked_at,
                 )
             )
         return capabilities
@@ -3152,6 +3922,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     printer_capabilities=self.data.printer_capabilities,
                     pending_jobs=list(self.data.pending_jobs),
                     printer_busy_jobs=list(self._printer_busy_jobs),
+                    signal_pending_jobs=list(self._signal_pending_jobs),
+                    signal_groups=list(self._signal_groups),
+                    signal_groups_checked_at=self._signal_groups_checked_at,
                 )
             )
 
@@ -3367,6 +4140,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
     async def _async_update_data(self) -> AutoPrintData:
         """Check printer state, process folder intake, and flush scheduled jobs."""
+        await self.async_sync_signal_receiver()
+        self._expire_signal_pending_jobs()
         printer_online = await self._async_check_printer_online()
 
         # Auto-flush pending jobs when the print window opens.
@@ -3399,6 +4174,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             printer_capabilities=self._printer_capabilities,
             pending_jobs=list(self._pending_jobs),
             printer_busy_jobs=list(self._printer_busy_jobs),
+            signal_pending_jobs=list(self._signal_pending_jobs),
+            signal_groups=list(self._signal_groups),
+            signal_groups_checked_at=self._signal_groups_checked_at,
         )
 
     # ------------------------------------------------------------------
@@ -3466,6 +4244,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "status_reply_subject": result.status_reply_subject,
                 "status_reply_message": result.status_reply_message,
                 "status_reply_delivery": result.status_reply_delivery,
+                "source": result.source,
+                "signal_job_id": result.signal_job_id,
+                "signal_group_id": result.signal_group_id,
+                "signal_group_name": result.signal_group_name,
                 "timestamp": result.timestamp,
             },
         )

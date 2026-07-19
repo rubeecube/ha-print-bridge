@@ -35,6 +35,11 @@ from custom_components.print_bridge.const import (
     CONF_AUTO_PRINT_ENABLED,
     CONF_DIRECT_PRINTER_URL,
     CONF_QUEUE_FOLDER,
+    CONF_SIGNAL_ACCOUNT,
+    CONF_SIGNAL_ALLOWED_GROUP_IDS,
+    CONF_SIGNAL_CONFIRMATION_MODE,
+    CONF_SIGNAL_ENABLED,
+    CONF_SIGNAL_REST_URL,
     DOMAIN,
 )
 from custom_components.print_bridge.coordinator import (
@@ -62,6 +67,15 @@ def _make_pdf_with_widths(widths: list[int]) -> bytes:
 
 
 _FAKE_PDF = _make_pdf_with_widths([595])
+
+_SIGNAL_OPTIONS = {
+    **MOCK_OPTIONS,
+    CONF_SIGNAL_ENABLED: True,
+    CONF_SIGNAL_REST_URL: "http://signal.local:8080",
+    CONF_SIGNAL_ACCOUNT: "+15550000",
+    CONF_SIGNAL_ALLOWED_GROUP_IDS: ["group.print"],
+    CONF_SIGNAL_CONFIRMATION_MODE: "ha_only",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +129,57 @@ def _pdf_parts(filename: str = "document.pdf") -> dict:
             "content_type": "application/pdf",
             "filename": filename,
             "content_transfer_encoding": "base64",
+        }
+    }
+
+
+def _signal_payload(
+    *,
+    sender: str = "+15550100",
+    group_id: str | None = "print",
+    text: str = "",
+    filename: str = "document.pdf",
+    data: bytes | None = None,
+) -> dict:
+    message: dict = {
+        "message": text,
+        "attachments": [
+            {
+                "id": "att-1",
+                "filename": filename,
+                "contentType": "application/pdf",
+                "data": base64.b64encode(data or _make_a4_pdf(page_count=1)).decode(),
+            }
+        ],
+    }
+    if group_id:
+        message["groupInfo"] = {"groupId": group_id, "name": "Print Group"}
+    return {
+        "envelope": {
+            "sourceNumber": sender,
+            "sourceUuid": "sender-uuid",
+            "timestamp": 1770000000000,
+            "dataMessage": message,
+        }
+    }
+
+
+def _signal_command_payload(
+    token: str,
+    *,
+    sender: str = "+15550100",
+    group_id: str | None = "print",
+    command: str = "print",
+) -> dict:
+    message: dict = {"message": f"{command} {token}"}
+    if group_id:
+        message["groupInfo"] = {"groupId": group_id, "name": "Print Group"}
+    return {
+        "envelope": {
+            "sourceNumber": sender,
+            "sourceUuid": "sender-uuid",
+            "timestamp": 1770000000001,
+            "dataMessage": message,
         }
     }
 
@@ -502,6 +567,133 @@ async def test_empty_allowed_senders_accepts_all(hass: HomeAssistant) -> None:
             _event(sender="anyone@anywhere.com", parts=_pdf_parts())
         )
     mock_process.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Signal intake — confirmation required
+# ---------------------------------------------------------------------------
+
+async def test_signal_document_creates_pending_job_without_printing(
+    hass: HomeAssistant,
+) -> None:
+    with patch(
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator.async_sync_signal_receiver",
+        new=AsyncMock(),
+    ):
+        _, coordinator = await _setup_coordinator(hass, options=_SIGNAL_OPTIONS)
+
+    fake_client = AsyncMock()
+    with (
+        patch.object(coordinator, "async_send_print_job", new=AsyncMock()) as mock_send,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        handled = await coordinator.async_process_signal_payload(
+            _signal_payload(),
+            client=fake_client,
+        )
+
+    assert handled == 1
+    assert len(coordinator._signal_pending_jobs) == 1
+    assert coordinator._signal_pending_jobs[0].attachments[0].filename == "document.pdf"
+    mock_send.assert_not_awaited()
+
+
+async def test_confirm_signal_job_prints_pending_document(
+    hass: HomeAssistant,
+) -> None:
+    with patch(
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator.async_sync_signal_receiver",
+        new=AsyncMock(),
+    ):
+        _, coordinator = await _setup_coordinator(hass, options=_SIGNAL_OPTIONS)
+
+    fake_client = AsyncMock()
+    with patch.object(coordinator, "async_request_refresh", new=AsyncMock()):
+        await coordinator.async_process_signal_payload(
+            _signal_payload(filename="signal.pdf"),
+            client=fake_client,
+        )
+    job = coordinator._signal_pending_jobs[0]
+    send_result = PrintJobResult(filename="signal.pdf", success=True)
+
+    with (
+        patch.object(
+            coordinator,
+            "async_send_print_job",
+            new=AsyncMock(return_value=send_result),
+        ) as mock_send,
+        patch.object(coordinator, "_async_notify_job", new=AsyncMock()),
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        result = await coordinator.async_confirm_signal_job(job_id=job.job_id)
+
+    mock_send.assert_awaited_once()
+    assert result.success is True
+    assert result.source == "signal"
+    assert result.signal_group_id == "group.print"
+    assert result.attachments == ["signal.pdf"]
+    assert coordinator._signal_pending_jobs == []
+
+
+async def test_signal_group_filter_rejects_other_groups(
+    hass: HomeAssistant,
+) -> None:
+    with patch(
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator.async_sync_signal_receiver",
+        new=AsyncMock(),
+    ):
+        _, coordinator = await _setup_coordinator(hass, options=_SIGNAL_OPTIONS)
+
+    with patch.object(coordinator, "async_request_refresh", new=AsyncMock()):
+        handled = await coordinator.async_process_signal_payload(
+            _signal_payload(group_id="other"),
+            client=AsyncMock(),
+        )
+
+    assert handled == 0
+    assert coordinator._signal_pending_jobs == []
+
+
+async def test_signal_reply_command_confirms_matching_pending_job(
+    hass: HomeAssistant,
+) -> None:
+    options = {
+        **_SIGNAL_OPTIONS,
+        CONF_SIGNAL_CONFIRMATION_MODE: "ha_and_signal",
+    }
+    with patch(
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator.async_sync_signal_receiver",
+        new=AsyncMock(),
+    ):
+        _, coordinator = await _setup_coordinator(hass, options=options)
+
+    fake_client = AsyncMock()
+    with patch.object(coordinator, "async_request_refresh", new=AsyncMock()):
+        await coordinator.async_process_signal_payload(
+            _signal_payload(filename="reply.pdf"),
+            client=fake_client,
+        )
+    token = coordinator._signal_pending_jobs[0].token
+    send_result = PrintJobResult(filename="reply.pdf", success=True)
+
+    with (
+        patch.object(
+            coordinator,
+            "async_send_print_job",
+            new=AsyncMock(return_value=send_result),
+        ) as mock_send,
+        patch.object(coordinator, "_async_notify_job", new=AsyncMock()),
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        handled = await coordinator.async_process_signal_payload(
+            _signal_command_payload(token),
+            client=fake_client,
+        )
+
+    assert handled == 1
+    mock_send.assert_awaited_once()
+    fake_client.send_message.assert_awaited()
+    assert coordinator._signal_pending_jobs == []
 
 
 async def test_display_name_sender_is_processed(hass: HomeAssistant) -> None:

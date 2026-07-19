@@ -15,6 +15,9 @@ from .const import (
     BUTTON_CANCEL_QUEUED_JOBS,
     BUTTON_CHECK_FILTER,
     BUTTON_CHECK_PRINTER_CAPABILITIES,
+    BUTTON_CHECK_SIGNAL_GROUPS,
+    BUTTON_CONFIRM_SIGNAL_PREFIX,
+    BUTTON_CONFIRM_SIGNAL_SLOTS,
     BUTTON_FLUSH_PENDING,
     BUTTON_PRINT_EMAIL_PREFIX,
     BUTTON_PRINT_EMAIL_SLOTS,
@@ -67,6 +70,11 @@ async def async_setup_entry(
             RetryLastFailedButton(coordinator, entry),
             FlushPendingButton(coordinator, entry),
             CancelQueuedJobsButton(coordinator, entry),
+            CheckSignalGroupsButton(coordinator, entry),
+            *[
+                ConfirmSignalJobButton(coordinator, entry, slot)
+                for slot in range(BUTTON_CONFIRM_SIGNAL_SLOTS)
+            ],
             *[
                 PrintPreviewEmailButton(coordinator, entry, slot)
                 for slot in range(BUTTON_PRINT_EMAIL_SLOTS)
@@ -207,13 +215,82 @@ class CancelQueuedJobsButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEnti
         return bool(
             data
             and (
-                data.pending_jobs or data.printer_busy_jobs or data.queue_depth > 0
+                data.pending_jobs
+                or data.signal_pending_jobs
+                or data.printer_busy_jobs
+                or data.queue_depth > 0
             )
         )
 
     async def async_press(self) -> None:
         """Discard jobs that have not yet been submitted to the printer."""
         await self.coordinator.async_cancel_queued_jobs()
+
+
+class CheckSignalGroupsButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
+    """Fetch Signal group IDs from the configured Signal module."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = BUTTON_CHECK_SIGNAL_GROUPS
+    _attr_icon = "mdi:account-group-outline"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{BUTTON_CHECK_SIGNAL_GROUPS}"
+        self._attr_device_info = _device_info(entry)
+
+    async def async_press(self) -> None:
+        """Refresh Signal group discovery."""
+        await self.coordinator.async_check_signal_groups()
+
+
+class ConfirmSignalJobButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
+    """Confirm one of the latest pending Signal document jobs."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:message-check-outline"
+
+    def __init__(
+        self, coordinator: AutoPrintCoordinator, entry: ConfigEntry, slot: int
+    ) -> None:
+        super().__init__(coordinator)
+        self._slot = slot
+        self._attr_unique_id = (
+            f"{entry.entry_id}_{BUTTON_CONFIRM_SIGNAL_PREFIX}_{slot + 1}"
+        )
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def _job(self):
+        data = self.coordinator.data
+        if not data or self._slot >= len(data.signal_pending_jobs):
+            return None
+        return data.signal_pending_jobs[self._slot]
+
+    @property
+    def available(self) -> bool:
+        return self._job is not None
+
+    @property
+    def name(self) -> str:
+        job = self._job
+        if not job:
+            return f"Confirm Signal Job {self._slot + 1}"
+        return f"Confirm Signal {self._slot + 1}: {job.filename[:48]}"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        job = self._job
+        if not job:
+            return {}
+        return job.as_dict()
+
+    async def async_press(self) -> None:
+        """Confirm and print this pending Signal job."""
+        job = self._job
+        if not job:
+            raise HomeAssistantError("No pending Signal job in this slot.")
+        await self.coordinator.async_confirm_signal_job(job_id=job.job_id)
 
 
 class PrintPreviewEmailButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):

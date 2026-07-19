@@ -23,6 +23,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.print_bridge.const import (
     BINARY_SENSOR_PRINTER_ONLINE,
     BUTTON_CANCEL_QUEUED_JOBS,
+    BUTTON_CONFIRM_SIGNAL_PREFIX,
     BUTTON_PRINT_EMAIL_PREFIX,
     BUTTON_PRINT_EMAIL_SLOTS,
     CONF_ALLOWED_SENDERS,
@@ -41,6 +42,7 @@ from custom_components.print_bridge.const import (
     SENSOR_LAST_JOB,
     SENSOR_PENDING_JOBS,
     SENSOR_QUEUE_DEPTH,
+    SENSOR_SIGNAL_PENDING_JOBS,
     SWITCH_AUTO_PRINT_ENABLED,
     SWITCH_REVERSE_ORDER,
     TEXT_ALLOWED_SENDERS,
@@ -52,8 +54,10 @@ from custom_components.print_bridge.coordinator import (
     BusyPrintJob,
     PendingJob,
     PrintJobResult,
+    SignalPendingJob,
 )
 from custom_components.print_bridge.imap_checker import EmailPreview
+from custom_components.print_bridge.signal_client import SignalAttachment
 
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
 
@@ -205,6 +209,52 @@ async def test_pending_jobs_sensor_includes_printer_busy_jobs(
     assert state.attributes["schedule_jobs"] == 1
     assert state.attributes["printer_busy_jobs"] == 1
     assert state.attributes["jobs"][1]["queue_type"] == "printer_busy"
+
+
+async def test_signal_pending_sensor_and_confirm_button(
+    hass: HomeAssistant,
+) -> None:
+    signal_job = SignalPendingJob(
+        job_id="job-1",
+        token="abc123",
+        message_id="message-1",
+        sender="+15550100",
+        sender_name="Sender",
+        sender_uuid="sender-uuid",
+        group_id="group.print",
+        group_name="Print Group",
+        text="",
+        attachments=(
+            SignalAttachment(
+                filename="signal.pdf",
+                content_type="application/pdf",
+                data=b"%PDF-1.4",
+            ),
+        ),
+        expires_at="2026-04-24T10:00:00",
+    )
+    entry = await _setup(
+        hass,
+        AutoPrintData(
+            queue_depth=0,
+            printer_online=True,
+            signal_pending_jobs=[signal_job],
+        ),
+    )
+
+    state = hass.states.get(_entity_id(hass, entry, SENSOR_SIGNAL_PENDING_JOBS))
+    assert state.state == "1"
+    assert state.attributes["jobs"][0]["token"] == "abc123"
+
+    btn = _entity_id(hass, entry, f"{BUTTON_CONFIRM_SIGNAL_PREFIX}_1")
+    with patch.object(
+        entry.runtime_data,
+        "async_confirm_signal_job",
+        new=AsyncMock(return_value=PrintJobResult(filename="signal.pdf", success=True)),
+    ) as mock_confirm:
+        await hass.services.async_call("button", "press", {"entity_id": btn}, blocking=True)
+
+    mock_confirm.assert_awaited_once_with(job_id="job-1")
 
 
 # ---------------------------------------------------------------------------

@@ -40,6 +40,14 @@ from .const import (
     CONF_QUEUE_FOLDER,
     CONF_RASTER_DPI,
     CONF_REVERSE_ORDER,
+    CONF_SIGNAL_ACCOUNT,
+    CONF_SIGNAL_ALLOWED_GROUP_IDS,
+    CONF_SIGNAL_ALLOWED_SENDERS,
+    CONF_SIGNAL_CONFIRMATION_MODE,
+    CONF_SIGNAL_CONFIRMATION_TTL_HOURS,
+    CONF_SIGNAL_ENABLED,
+    CONF_SIGNAL_MODULE_ID,
+    CONF_SIGNAL_REST_URL,
     CONF_AUTO_PRINT_ENABLED,
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_DAYS,
@@ -59,6 +67,14 @@ from .const import (
     DEFAULT_QUEUE_FOLDER,
     DEFAULT_RASTER_DPI,
     DEFAULT_REVERSE_ORDER,
+    DEFAULT_SIGNAL_ACCOUNT,
+    DEFAULT_SIGNAL_ALLOWED_GROUP_IDS,
+    DEFAULT_SIGNAL_ALLOWED_SENDERS,
+    DEFAULT_SIGNAL_CONFIRMATION_MODE,
+    DEFAULT_SIGNAL_CONFIRMATION_TTL_HOURS,
+    DEFAULT_SIGNAL_ENABLED,
+    DEFAULT_SIGNAL_MODULE_ID,
+    DEFAULT_SIGNAL_REST_URL,
     DEFAULT_AUTO_PRINT_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
     DEFAULT_SCHEDULE_DAYS,
@@ -71,6 +87,7 @@ from .const import (
     DUPLEX_MODES,
     EMAIL_ACTIONS,
     SCHEDULE_DAYS,
+    SIGNAL_CONFIRMATION_MODES,
 )
 from .print_handler import http_url_to_ipp_uri
 
@@ -136,6 +153,27 @@ def _schedule_days_to_text(value: Any) -> str:
     if days is None:
         return ""
     return "\n".join(day for day in SCHEDULE_DAYS if day in days)
+
+
+def _split_option_lines(value: Any, *, lower: bool = False) -> list[str]:
+    """Parse newline/comma-separated text into a de-duplicated string list."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_values = _re.split(r"[\n,]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_values = [str(item) for item in value]
+    else:
+        raw_values = [str(value)]
+
+    items: list[str] = []
+    for raw_value in raw_values:
+        item = raw_value.strip()
+        if lower:
+            item = item.lower()
+        if item and item not in items:
+            items.append(item)
+    return items
 
 
 # Sentinel option values used in select fields
@@ -579,6 +617,13 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 for f in user_input.get(CONF_FOLDER_FILTER, "").splitlines()
                 if f.strip()
             ]
+            signal_senders = _split_option_lines(
+                user_input.get(CONF_SIGNAL_ALLOWED_SENDERS, ""),
+                lower=True,
+            )
+            signal_groups = _split_option_lines(
+                user_input.get(CONF_SIGNAL_ALLOWED_GROUP_IDS, "")
+            )
             schedule_days = _parse_schedule_days(
                 user_input.get(CONF_SCHEDULE_DAYS, "")
             )
@@ -608,6 +653,22 @@ class AutoPrintOptionsFlow(OptionsFlow):
                         CONF_BOOKLET_PATTERNS: patterns,
                         CONF_ALLOWED_SENDERS: senders,
                         CONF_FOLDER_FILTER: folders,
+                        CONF_SIGNAL_ALLOWED_SENDERS: signal_senders,
+                        CONF_SIGNAL_ALLOWED_GROUP_IDS: signal_groups,
+                        CONF_SIGNAL_MODULE_ID: str(
+                            user_input.get(
+                                CONF_SIGNAL_MODULE_ID, DEFAULT_SIGNAL_MODULE_ID
+                            )
+                            or DEFAULT_SIGNAL_MODULE_ID
+                        ).strip(),
+                        CONF_SIGNAL_REST_URL: str(
+                            user_input.get(CONF_SIGNAL_REST_URL, "")
+                            or ""
+                        ).strip().rstrip("/"),
+                        CONF_SIGNAL_ACCOUNT: str(
+                            user_input.get(CONF_SIGNAL_ACCOUNT, "")
+                            or ""
+                        ).strip(),
                         CONF_SCHEDULE_DAYS: schedule_days or [],
                         CONF_SCHEDULE_TEMPLATE: schedule_template,
                     },
@@ -616,6 +677,12 @@ class AutoPrintOptionsFlow(OptionsFlow):
         current_patterns = options.get(CONF_BOOKLET_PATTERNS, [])
         current_senders = options.get(CONF_ALLOWED_SENDERS, [])
         current_folders = options.get(CONF_FOLDER_FILTER, [])
+        current_signal_senders = options.get(
+            CONF_SIGNAL_ALLOWED_SENDERS, DEFAULT_SIGNAL_ALLOWED_SENDERS
+        )
+        current_signal_groups = options.get(
+            CONF_SIGNAL_ALLOWED_GROUP_IDS, DEFAULT_SIGNAL_ALLOWED_GROUP_IDS
+        )
         current_schedule_days = _schedule_days_to_text(
             options.get(CONF_SCHEDULE_DAYS, DEFAULT_SCHEDULE_DAYS)
         )
@@ -671,6 +738,46 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 CONF_COLLATE,
                 default=options.get(CONF_COLLATE, DEFAULT_COLLATE),
             ): bool,
+            vol.Required(
+                CONF_SIGNAL_ENABLED,
+                default=options.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED),
+            ): bool,
+            vol.Optional(
+                CONF_SIGNAL_MODULE_ID,
+                default=options.get(
+                    CONF_SIGNAL_MODULE_ID, DEFAULT_SIGNAL_MODULE_ID
+                ),
+            ): str,
+            vol.Optional(
+                CONF_SIGNAL_REST_URL,
+                default=options.get(CONF_SIGNAL_REST_URL, DEFAULT_SIGNAL_REST_URL),
+            ): str,
+            vol.Optional(
+                CONF_SIGNAL_ACCOUNT,
+                default=options.get(CONF_SIGNAL_ACCOUNT, DEFAULT_SIGNAL_ACCOUNT),
+            ): str,
+            vol.Optional(
+                CONF_SIGNAL_ALLOWED_SENDERS,
+                default="\n".join(current_signal_senders),
+            ): str,
+            vol.Optional(
+                CONF_SIGNAL_ALLOWED_GROUP_IDS,
+                default="\n".join(current_signal_groups),
+            ): str,
+            vol.Required(
+                CONF_SIGNAL_CONFIRMATION_MODE,
+                default=options.get(
+                    CONF_SIGNAL_CONFIRMATION_MODE,
+                    DEFAULT_SIGNAL_CONFIRMATION_MODE,
+                ),
+            ): vol.In(SIGNAL_CONFIRMATION_MODES),
+            vol.Required(
+                CONF_SIGNAL_CONFIRMATION_TTL_HOURS,
+                default=options.get(
+                    CONF_SIGNAL_CONFIRMATION_TTL_HOURS,
+                    DEFAULT_SIGNAL_CONFIRMATION_TTL_HOURS,
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=168)),
             vol.Required(
                 CONF_EMAIL_ACTION,
                 default=options.get(CONF_EMAIL_ACTION, DEFAULT_EMAIL_ACTION),

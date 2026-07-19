@@ -17,6 +17,14 @@ from .const import (
     ATTR_LAST_STATUS,
     CONF_DIRECT_PRINTER_URL,
     CONF_PRINTER_NAME,
+    CONF_SIGNAL_ACCOUNT,
+    CONF_SIGNAL_ENABLED,
+    CONF_SIGNAL_MODULE_ID,
+    CONF_SIGNAL_REST_URL,
+    DEFAULT_SIGNAL_ACCOUNT,
+    DEFAULT_SIGNAL_ENABLED,
+    DEFAULT_SIGNAL_MODULE_ID,
+    DEFAULT_SIGNAL_REST_URL,
     DOMAIN,
     SENSOR_FILTER_PREVIEW,
     SENSOR_JOB_LOG,
@@ -24,6 +32,8 @@ from .const import (
     SENSOR_PENDING_JOBS,
     SENSOR_PRINTER_CAPABILITIES,
     SENSOR_QUEUE_DEPTH,
+    SENSOR_SIGNAL_GROUPS,
+    SENSOR_SIGNAL_PENDING_JOBS,
 )
 from .coordinator import AutoPrintCoordinator, AutoPrintData
 
@@ -46,6 +56,8 @@ async def async_setup_entry(
             FilterPreviewSensor(coordinator, entry),
             PrinterCapabilitiesSensor(coordinator, entry),
             PendingJobsSensor(coordinator, entry),
+            SignalPendingJobsSensor(coordinator, entry),
+            SignalGroupsSensor(coordinator, entry),
         ]
     )
 
@@ -134,6 +146,10 @@ class LastJobSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
         attrs["skipped_attachments"] = list(job.skipped_attachments)
         attrs["merged_attachment_count"] = job.merged_attachment_count
         attrs["timestamp"] = job.timestamp
+        attrs["source"] = job.source
+        attrs["signal_job_id"] = job.signal_job_id
+        attrs["signal_group_id"] = job.signal_group_id
+        attrs["signal_group_name"] = job.signal_group_name
         return attrs
 
 
@@ -199,6 +215,10 @@ class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
                     },
                     "can_retry": j.can_retry,
                     "uid": j.imap_uid,
+                    "source": j.source,
+                    "signal_job_id": j.signal_job_id,
+                    "signal_group_id": j.signal_group_id,
+                    "signal_group_name": j.signal_group_name,
                 }
                 for i, j in enumerate(data.job_history)
             ]
@@ -334,4 +354,73 @@ class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
             "printer_busy_jobs": len(busy_jobs),
             "shown_jobs": len(visible_jobs),
             "jobs": [j.as_dict() for j in visible_jobs],
+        }
+
+
+class SignalPendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
+    """Signal document jobs waiting for explicit print confirmation."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = SENSOR_SIGNAL_PENDING_JOBS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "jobs"
+    _attr_icon = "mdi:message-text-clock-outline"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{SENSOR_SIGNAL_PENDING_JOBS}"
+        self._attr_device_info = _device_info(entry)
+        self._entry = entry
+
+    @property
+    def native_value(self) -> int:
+        data = self.coordinator.data
+        return len(data.signal_pending_jobs) if data else 0
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data
+        jobs = data.signal_pending_jobs if data else []
+        visible_jobs = jobs[:_MAX_DISPLAYED_PENDING_JOBS]
+        opts = self._entry.options
+        return {
+            "signal_enabled": opts.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED),
+            "signal_module_id": opts.get(
+                CONF_SIGNAL_MODULE_ID, DEFAULT_SIGNAL_MODULE_ID
+            ),
+            "signal_rest_url": opts.get(CONF_SIGNAL_REST_URL, DEFAULT_SIGNAL_REST_URL),
+            "signal_account": opts.get(CONF_SIGNAL_ACCOUNT, DEFAULT_SIGNAL_ACCOUNT),
+            "total_jobs": len(jobs),
+            "shown_jobs": len(visible_jobs),
+            "jobs": [job.as_dict() for job in visible_jobs],
+        }
+
+
+class SignalGroupsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
+    """Signal groups discovered from the configured Signal REST module."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = SENSOR_SIGNAL_GROUPS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "groups"
+    _attr_icon = "mdi:account-group-outline"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{SENSOR_SIGNAL_GROUPS}"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def native_value(self) -> int:
+        data = self.coordinator.data
+        return len(data.signal_groups) if data else 0
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data
+        if data is None:
+            return {"checked_at": None, "groups": []}
+        return {
+            "checked_at": data.signal_groups_checked_at,
+            "groups": list(data.signal_groups),
         }

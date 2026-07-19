@@ -301,6 +301,49 @@ check_printer_capabilities:
     the document formats it accepts.  The same capability data is used to choose
     whether Print Bridge sends PDF directly or converts PDF to PWG Raster.
 
+check_signal_groups:
+  name: Check Signal Groups
+  description: >-
+    Query the configured Signal REST module for known groups and expose their
+    stable group IDs in the Signal Groups sensor.
+
+confirm_signal_job:
+  name: Confirm Signal Job
+  description: >-
+    Confirm and print a Signal document job that is waiting for approval.
+    Use the job_id or token shown in the Signal Pending Jobs sensor.
+  fields:
+    job_id:
+      name: Job ID
+      description: Pending Signal job ID.
+      required: false
+      selector:
+        text:
+    token:
+      name: Token
+      description: Short confirmation token. Required when confirming from Signal replies.
+      required: false
+      selector:
+        text:
+
+cancel_signal_job:
+  name: Cancel Signal Job
+  description: >-
+    Cancel a Signal document job that is waiting for approval.
+  fields:
+    job_id:
+      name: Job ID
+      description: Pending Signal job ID.
+      required: false
+      selector:
+        text:
+    token:
+      name: Token
+      description: Short confirmation token.
+      required: false
+      selector:
+        text:
+
 process_imap_part:
   name: Process IMAP Email Part
   description: >-
