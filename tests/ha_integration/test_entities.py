@@ -34,8 +34,12 @@ from custom_components.print_bridge.const import (
     CONF_SELECTED_IMAP_ENTRY_ID,
     CONF_SELECTED_PRINTER_ENTRY_ID,
     CONF_SCHEDULE_START,
+    CONF_SIGNAL_ENABLED,
     BUTTON_TEST_PAGE,
+    CONF_DEFAULT_PRINT_TYPE,
+    CONF_PRINT_TYPES,
     DOMAIN,
+    SELECT_DEFAULT_PRINT_TYPE,
     SELECT_DUPLEX_MODE,
     SELECT_IMAP_ACCOUNT,
     SELECT_TARGET_PRINTER,
@@ -45,7 +49,9 @@ from custom_components.print_bridge.const import (
     SENSOR_SIGNAL_PENDING_JOBS,
     SWITCH_AUTO_PRINT_ENABLED,
     SWITCH_REVERSE_ORDER,
+    SWITCH_SIGNAL_ENABLED,
     TEXT_ALLOWED_SENDERS,
+    TEXT_PRINT_TYPES,
     TEXT_SCHEDULE_START,
 )
 from custom_components.print_bridge.coordinator import (
@@ -70,6 +76,7 @@ async def _setup(
     hass: HomeAssistant,
     data: AutoPrintData,
     entry_data: dict | None = None,
+    options: dict | None = None,
 ) -> MockConfigEntry:
     with patch(
         "custom_components.print_bridge.coordinator.AutoPrintCoordinator._async_update_data",
@@ -78,7 +85,7 @@ async def _setup(
         entry = MockConfigEntry(
             domain=DOMAIN,
             data=entry_data if entry_data is not None else MOCK_CONFIG_DATA,
-            options=MOCK_OPTIONS,
+            options=options if options is not None else MOCK_OPTIONS,
         )
         entry.add_to_hass(hass)
         await hass.config_entries.async_setup(entry.entry_id)
@@ -232,6 +239,13 @@ async def test_signal_pending_sensor_and_confirm_button(
             ),
         ),
         expires_at="2026-04-24T10:00:00",
+        print_type="booklet",
+        effective_settings={
+            "print_type": "booklet",
+            "duplex": "two-sided-short-edge",
+            "booklet": True,
+            "copies": 2,
+        },
     )
     entry = await _setup(
         hass,
@@ -245,6 +259,8 @@ async def test_signal_pending_sensor_and_confirm_button(
     state = hass.states.get(_entity_id(hass, entry, SENSOR_SIGNAL_PENDING_JOBS))
     assert state.state == "1"
     assert state.attributes["jobs"][0]["token"] == "abc123"
+    assert state.attributes["jobs"][0]["print_type"] == "booklet"
+    assert state.attributes["jobs"][0]["effective_settings"]["copies"] == 2
 
     btn = _entity_id(hass, entry, f"{BUTTON_CONFIRM_SIGNAL_PREFIX}_1")
     with patch.object(
@@ -401,6 +417,20 @@ async def test_reverse_order_switch_persists_option(hass: HomeAssistant) -> None
     assert hass.states.get(switch_id).state == "off"
 
 
+async def test_signal_switch_unavailable_without_signal_rest_integration(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(
+        hass,
+        AutoPrintData(queue_depth=0, printer_online=True),
+        options={**MOCK_OPTIONS, CONF_SIGNAL_ENABLED: True},
+    )
+    switch_id = _entity_id(hass, entry, SWITCH_SIGNAL_ENABLED)
+
+    assert hass.states.get(switch_id).state == "unavailable"
+    assert entry.runtime_data._signal_enabled is False
+
+
 async def test_config_select_persists_duplex_mode(hass: HomeAssistant) -> None:
     entry = await _setup(hass, AutoPrintData(queue_depth=0, printer_online=True))
     select_id = _entity_id(hass, entry, SELECT_DUPLEX_MODE)
@@ -414,6 +444,23 @@ async def test_config_select_persists_duplex_mode(hass: HomeAssistant) -> None:
 
     assert entry.options[CONF_DUPLEX_MODE] == "one-sided"
     assert hass.states.get(select_id).state == "One-sided"
+
+
+async def test_default_print_type_select_persists_option(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass, AutoPrintData(queue_depth=0, printer_online=True))
+    select_id = _entity_id(hass, entry, SELECT_DEFAULT_PRINT_TYPE)
+
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": select_id, "option": "Booklet"},
+        blocking=True,
+    )
+
+    assert entry.options[CONF_DEFAULT_PRINT_TYPE] == "booklet"
+    assert hass.states.get(select_id).state == "Booklet"
 
 
 async def test_config_text_persists_sender_list(hass: HomeAssistant) -> None:
@@ -432,6 +479,23 @@ async def test_config_text_persists_sender_list(hass: HomeAssistant) -> None:
         "b@example.com",
     ]
     assert hass.states.get(text_id).state == "a@example.com\nb@example.com"
+
+
+async def test_print_types_text_validates_and_persists_profiles(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass, AutoPrintData(queue_depth=0, printer_online=True))
+    text_id = _entity_id(hass, entry, TEXT_PRINT_TYPES)
+
+    await hass.services.async_call(
+        "text",
+        "set_value",
+        {"entity_id": text_id, "value": "weekly=booklet=true copies=2"},
+        blocking=True,
+    )
+
+    assert entry.options[CONF_PRINT_TYPES] == ["weekly=booklet=true copies=2"]
+    assert hass.states.get(text_id).state == "weekly=booklet=true copies=2"
 
 
 async def test_config_text_validates_schedule_time(hass: HomeAssistant) -> None:

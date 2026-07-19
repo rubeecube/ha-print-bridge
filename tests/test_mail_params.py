@@ -77,9 +77,11 @@ def test_order_alias_controls_reverse_order():
 def test_config_request_and_plain_body_copy_number_are_parsed():
     config = parse_mail_print_parameters("[pb config]", "")
     copies = parse_mail_print_parameters("Print", "3")
+    print_type = parse_mail_print_parameters("[pb type=Booklet]", "")
 
     assert config.config_request is True
     assert copies.copies == 3
+    assert print_type.print_type == "booklet"
 
 
 def test_invalid_bool_values_report_errors():

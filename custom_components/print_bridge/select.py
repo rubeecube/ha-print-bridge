@@ -14,24 +14,34 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_DEFAULT_PRINT_TYPE,
     CONF_DUPLEX_MODE,
     CONF_EMAIL_ACTION,
+    CONF_PRINT_TYPES,
     CONF_PRINTER_NAME,
     CONF_SIGNAL_CONFIRMATION_MODE,
     DEFAULT_DUPLEX_MODE,
     DEFAULT_EMAIL_ACTION,
+    DEFAULT_PRINT_TYPE,
+    DEFAULT_PRINT_TYPES,
     DEFAULT_SIGNAL_CONFIRMATION_MODE,
     DOMAIN,
     DUPLEX_MODES,
     EMAIL_ACTIONS,
     SELECT_DUPLEX_MODE,
     SELECT_EMAIL_ACTION,
+    SELECT_DEFAULT_PRINT_TYPE,
     SELECT_IMAP_ACCOUNT,
     SELECT_SIGNAL_CONFIRMATION_MODE,
     SELECT_TARGET_PRINTER,
     SIGNAL_CONFIRMATION_MODES,
 )
 from .coordinator import AutoPrintCoordinator
+from .print_profiles import (
+    normalize_print_type,
+    print_profile_label,
+    profile_names,
+)
 from .sensor import _device_info
 
 
@@ -79,6 +89,7 @@ async def async_setup_entry(
         [
             ImapAccountSelect(coordinator, entry),
             TargetPrinterSelect(coordinator, entry),
+            DefaultPrintTypeSelect(coordinator, entry),
             *[
                 OptionSelect(coordinator, entry, description)
                 for description in _OPTION_SELECTS
@@ -199,6 +210,49 @@ class TargetPrinterSelect(CoordinatorEntity[AutoPrintCoordinator], SelectEntity)
         if option not in mapping:
             raise HomeAssistantError(f"Unknown printer option: {option}")
         self.coordinator.set_selected_printer_entry_id(mapping[option])
+        self.async_write_ha_state()
+
+
+class DefaultPrintTypeSelect(CoordinatorEntity[AutoPrintCoordinator], SelectEntity):
+    """Select the default named print profile for Signal pending jobs."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = SELECT_DEFAULT_PRINT_TYPE
+    _attr_icon = "mdi:printer-settings"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{SELECT_DEFAULT_PRINT_TYPE}"
+        self._attr_device_info = _device_info(entry)
+
+    def _options_by_label(self) -> dict[str, str]:
+        names = profile_names(
+            self.coordinator._entry.options.get(CONF_PRINT_TYPES, DEFAULT_PRINT_TYPES)
+        )
+        return {print_profile_label(name): name for name in names}
+
+    @property
+    def options(self) -> list[str]:
+        return list(self._options_by_label())
+
+    @property
+    def current_option(self) -> str | None:
+        selected = normalize_print_type(
+            self.coordinator._entry.options.get(
+                CONF_DEFAULT_PRINT_TYPE,
+                DEFAULT_PRINT_TYPE,
+            )
+        )
+        for label, name in self._options_by_label().items():
+            if name == selected:
+                return label
+        return print_profile_label(DEFAULT_PRINT_TYPE)
+
+    async def async_select_option(self, option: str) -> None:
+        mapping = self._options_by_label()
+        if option not in mapping:
+            raise HomeAssistantError(f"Unknown print type option: {option}")
+        self.coordinator.set_option(CONF_DEFAULT_PRINT_TYPE, mapping[option])
         self.async_write_ha_state()
 
 

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -131,13 +132,29 @@ class OptionSwitch(CoordinatorEntity[AutoPrintCoordinator], SwitchEntity):
 
     @property
     def is_on(self) -> bool:
+        if self._description.key == CONF_SIGNAL_ENABLED:
+            return self.coordinator._signal_enabled
         return bool(
             self.coordinator._entry.options.get(
                 self._description.key, self._description.default
             )
         )
 
+    @property
+    def available(self) -> bool:
+        if self._description.key == CONF_SIGNAL_ENABLED:
+            return self.coordinator.signal_rest_integration_detected
+        return super().available
+
     async def async_turn_on(self, **kwargs) -> None:
+        if (
+            self._description.key == CONF_SIGNAL_ENABLED
+            and not self.coordinator.signal_rest_integration_detected
+        ):
+            raise HomeAssistantError(
+                "Configure the Home Assistant Signal Messenger integration before "
+                "enabling Signal intake."
+            )
         self.coordinator.set_option(self._description.key, True)
 
     async def async_turn_off(self, **kwargs) -> None:

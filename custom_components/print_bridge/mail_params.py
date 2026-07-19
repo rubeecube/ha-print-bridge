@@ -84,6 +84,8 @@ _KEY_ALIASES = {
     "paper": "media",
     "print_extensions": "allowed_extensions",
     "quantity": "copies",
+    "profile": "print_type",
+    "print_type": "print_type",
     "raster_dpi": "raster_dpi",
     "reply": "reply",
     "reverse": "reverse_order",
@@ -98,6 +100,7 @@ _KEY_ALIASES = {
     "skip_filename": "attachment_ignore_filter",
     "skip_filenames": "attachment_ignore_filter",
     "status_reply": "reply",
+    "type": "print_type",
     "dpi": "raster_dpi",
     "quality": "raster_dpi",
 }
@@ -157,6 +160,7 @@ class MailPrintParameters:
     ignored_extensions: tuple[str, ...] | None = None
     reply: bool | None = None
     reverse_order: bool | None = None
+    print_type: str | None = None
     config_request: bool = False
     errors: tuple[str, ...] = ()
 
@@ -178,6 +182,7 @@ class MailPrintParameters:
                 self.ignored_extensions,
                 self.reply,
                 self.reverse_order,
+                self.print_type,
             )
         )
 
@@ -197,6 +202,7 @@ class MailPrintParameters:
             "ignored_extensions",
             "reply",
             "reverse_order",
+            "print_type",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -284,6 +290,7 @@ def parse_mail_print_parameters(subject: str = "", body: str = "") -> MailPrintP
         ),
         reply=_parse_bool(raw_pairs.get("reply"), "reply", errors),
         reverse_order=_parse_reverse_order(raw_pairs, errors),
+        print_type=_parse_print_type(raw_pairs.get("print_type"), errors),
         config_request=config_request,
         errors=tuple(errors),
     )
@@ -362,6 +369,18 @@ def _parse_reverse_order(raw_pairs: dict[str, str], errors: list[str]) -> bool |
         return False
     errors.append(
         f"Invalid order value '{order}': expected reverse or normal"
+    )
+    return None
+
+
+def _parse_print_type(value: str | None, errors: list[str]) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower().replace(" ", "_")
+    if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", normalized):
+        return normalized
+    errors.append(
+        f"Invalid print_type value '{value}': expected a profile name using letters, numbers, dashes, or underscores"
     )
     return None
 

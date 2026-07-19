@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.31] — 2026-07-19
+
+### Added
+
+- **Signal print types** — added built-in and custom named print profiles for pending Signal document jobs, including `normal`, `simplex`, `duplex`, `booklet`, `draft`, and user-defined profile lines.
+- **Adjustable Signal confirmation** — pending Signal jobs now reply with effective settings and accept `set <token> ...` or inline `print <token> ...` overrides before confirmation.
+- **Signal Messenger detection gate** — Signal intake remains disabled until Home Assistant detects the Signal Messenger REST integration or legacy `signal_messenger.notify` platform.
+
+### Changed
+
+- Signal pending sensors now expose configured/enabled/detected state plus effective print settings.
+- Documentation now covers Signal print types, adjustment commands, and the Signal Messenger detection requirement.
+- Bumped package metadata to `0.1.31`.
+
+---
+
 ## [0.1.30] — 2026-07-19
 
 ### Added
@@ -335,6 +351,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.31]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.31
+[0.1.30]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.30
 [0.1.24]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.24
 [0.1.23]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.23
 [0.1.22]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.22

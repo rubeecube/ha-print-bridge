@@ -7,8 +7,8 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-205%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.30-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-218%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.31-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
@@ -238,8 +238,10 @@ Use CUPS when: the printer is USB-attached, needs driver/raster conversion, or y
 
 ### 3. Signal REST Module — optional for Signal printing
 
-Signal printing is disabled by default and is confirmation-only. Configure a
-signal-cli-rest-api compatible receiver module in Print Bridge options:
+Signal printing is disabled by default and is confirmation-only. It stays
+disabled until Home Assistant detects the **Signal Messenger** integration.
+After that, configure the signal-cli-rest-api compatible receiver module in
+Print Bridge options:
 
 | Field | Description |
 |---|---|
@@ -249,6 +251,8 @@ signal-cli-rest-api compatible receiver module in Print Bridge options:
 | Signal Allowed Senders | Trusted Signal phone numbers or UUIDs, one per line. |
 | Signal Allowed Group IDs | Trusted Signal group IDs, one per line. Use **Check Signal Groups** to discover exact IDs. |
 | Signal Confirmation Mode | `Home Assistant and Signal` by default. Pending jobs can be confirmed from HA or by replying `print <token>` in Signal. |
+| Default Print Type | Named profile used for new pending Signal jobs. |
+| Custom Print Types | Optional profile lines, such as `weekly=booklet=true copies=2 media=a4`. |
 
 For group printing, use exact group IDs, not display names. Names can change or
 duplicate; group IDs are the stable filter.
@@ -274,7 +278,9 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 | **Delete after printing** | On | Remove successfully printed queue-folder files. If off, printed files are remembered and not reprinted unless modified. |
 | **Print Queue Folder** | `/media/print_queue` | Drop supported files here for folder-to-printer intake. Also used by the queue-depth sensor and `clear_queue`. |
 | **Raster DPI** | `150` | Used only when direct IPP printing must convert PDFs to PWG Raster/JPEG. Lower values are faster and create smaller jobs. |
-| **Enable Signal intake** | Off | Receive Signal document attachments from the configured module. Nothing prints automatically; each received document waits for confirmation. |
+| **Default Print Type** | Normal | Named profile used for pending Signal jobs before confirmation. Built-ins: `normal`, `simplex`, `duplex`, `booklet`, `draft`. |
+| **Custom Print Types** | *(empty)* | Optional profile lines. Example: `weekly=booklet=true copies=2 media=a4`. |
+| **Enable Signal intake** | Off | Receive Signal document attachments from the configured module. This remains unavailable/off until Home Assistant detects the Signal Messenger integration. Nothing prints automatically; each received document waits for confirmation. |
 | **Signal Module ID** | `019ef0ac-4dcf-72b2-b5ec-3ff077450a00` | Identifier of the Signal module used by this integration. |
 | **Signal REST URL** | *(empty)* | Base URL for the signal-cli-rest-api compatible module. |
 | **Signal Account / Number** | *(empty)* | Signal account registered in the module. |
@@ -504,13 +510,41 @@ after one of these confirmation paths succeeds:
 Signal reply commands are available when confirmation mode includes Signal:
 
 ```text
+set <token> type=booklet copies=2
 print <token>
+print <token> type=booklet copies=2
 cancel <token>
 ```
+
+`set` updates the pending job and replies with the new effective settings without
+printing. `print` may include final inline overrides; invalid values are rejected
+and the job remains pending.
 
 Each confirmed Signal job uses the same conversion, merge, booklet, reverse
 order, collate, direct IPP/CUPS, busy-printer retry, audit, and notification
 pipeline as email and folder jobs.
+
+#### Signal print types
+
+Signal pending jobs start with the configured **Default Print Type** and can be
+adjusted before confirmation.
+
+Built-in print types:
+
+| Type | Settings |
+|---|---|
+| `normal` | Current integration defaults and booklet filename patterns |
+| `simplex` | One-sided, not booklet |
+| `duplex` | Two-sided long-edge, not booklet |
+| `booklet` | Booklet, short-edge duplex, landscape |
+| `draft` | One-sided, not booklet, fast raster DPI |
+
+Add custom types in **Custom Print Types**, one per line:
+
+```text
+weekly=booklet=true copies=2 media=a4
+receipt=duplex=one-sided reverse=true
+```
 
 ### Mail print parameters
 
@@ -563,6 +597,7 @@ Supported parameters:
 | `ignored_extensions` / `ignore_extensions` / `skip_extensions` | Extension deny-list, such as `png tiff`; dots are optional |
 | `reply` / `status_reply` | `true` to request a status reply, `false` to suppress one |
 | `reverse` / `reverse_order` / `order` | `true`, `false`, `reverse`, or `normal` for one-sided page order |
+| `type` / `print_type` / `profile` | Named Signal print type, such as `normal`, `booklet`, or a custom type |
 | `config` / `command=config` | Reply with all configurable mail parameters when no printable attachment is present |
 
 Boolean values are case-insensitive and accept `true`/`false`, `yes`/`no`,

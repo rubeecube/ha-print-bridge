@@ -30,6 +30,7 @@ from .const import (
     CONF_COLLATE,
     CONF_CUPS_URL,
     CONF_DIRECT_PRINTER_URL,
+    CONF_DEFAULT_PRINT_TYPE,
     CONF_DUPLEX_MODE,
     CONF_EMAIL_ACTION,
     CONF_EMAIL_ARCHIVE_FOLDER,
@@ -37,6 +38,7 @@ from .const import (
     CONF_NOTIFY_ON_FAILURE,
     CONF_NOTIFY_ON_SUCCESS,
     CONF_PRINTER_NAME,
+    CONF_PRINT_TYPES,
     CONF_QUEUE_FOLDER,
     CONF_RASTER_DPI,
     CONF_REVERSE_ORDER,
@@ -59,6 +61,8 @@ from .const import (
     DEFAULT_AUTO_DELETE,
     DEFAULT_COLLATE,
     DEFAULT_CUPS_URL,
+    DEFAULT_PRINT_TYPE,
+    DEFAULT_PRINT_TYPES,
     DEFAULT_DUPLEX_MODE,
     DEFAULT_EMAIL_ACTION,
     DEFAULT_EMAIL_ARCHIVE_FOLDER,
@@ -88,6 +92,14 @@ from .const import (
     EMAIL_ACTIONS,
     SCHEDULE_DAYS,
     SIGNAL_CONFIRMATION_MODES,
+    SIGNAL_REST_COMPONENTS,
+    SIGNAL_REST_INTEGRATION_DOMAIN,
+)
+from .print_profiles import (
+    normalize_print_type,
+    parse_print_profiles,
+    print_profile_label,
+    profile_names,
 )
 from .print_handler import http_url_to_ipp_uri
 
@@ -174,6 +186,14 @@ def _split_option_lines(value: Any, *, lower: bool = False) -> list[str]:
         if item and item not in items:
             items.append(item)
     return items
+
+
+def _signal_rest_integration_detected(hass: HomeAssistant) -> bool:
+    """Return True when HA has Signal Messenger/REST configured."""
+    return bool(
+        hass.config_entries.async_entries(SIGNAL_REST_INTEGRATION_DOMAIN)
+        or any(component in hass.config.components for component in SIGNAL_REST_COMPONENTS)
+    )
 
 
 # Sentinel option values used in select fields
@@ -593,6 +613,7 @@ class AutoPrintOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         options = self._config_entry.options
         imap_entries = list(self.hass.config_entries.async_entries("imap"))
+        signal_rest_detected = _signal_rest_integration_detected(self.hass)
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -624,6 +645,13 @@ class AutoPrintOptionsFlow(OptionsFlow):
             signal_groups = _split_option_lines(
                 user_input.get(CONF_SIGNAL_ALLOWED_GROUP_IDS, "")
             )
+            print_type_lines = _split_option_lines(
+                user_input.get(CONF_PRINT_TYPES, "")
+            )
+            profiles, profile_errors = parse_print_profiles(print_type_lines)
+            default_print_type = normalize_print_type(
+                user_input.get(CONF_DEFAULT_PRINT_TYPE, DEFAULT_PRINT_TYPE)
+            )
             schedule_days = _parse_schedule_days(
                 user_input.get(CONF_SCHEDULE_DAYS, "")
             )
@@ -639,6 +667,11 @@ class AutoPrintOptionsFlow(OptionsFlow):
             if schedule_days is None:
                 errors[CONF_SCHEDULE_DAYS] = "invalid_schedule_days"
 
+            if profile_errors:
+                errors[CONF_PRINT_TYPES] = "invalid_print_types"
+            elif default_print_type not in profiles:
+                errors[CONF_DEFAULT_PRINT_TYPE] = "unknown_print_type"
+
             if schedule_template:
                 try:
                     Template(schedule_template, self.hass).ensure_valid()
@@ -646,13 +679,20 @@ class AutoPrintOptionsFlow(OptionsFlow):
                     errors[CONF_SCHEDULE_TEMPLATE] = "invalid_template"
 
             if not errors:
+                signal_enabled = (
+                    bool(user_input.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED))
+                    and signal_rest_detected
+                )
                 return self.async_create_entry(
                     title="",
                     data={
                         **user_input,
+                        CONF_SIGNAL_ENABLED: signal_enabled,
                         CONF_BOOKLET_PATTERNS: patterns,
                         CONF_ALLOWED_SENDERS: senders,
                         CONF_FOLDER_FILTER: folders,
+                        CONF_PRINT_TYPES: print_type_lines,
+                        CONF_DEFAULT_PRINT_TYPE: default_print_type,
                         CONF_SIGNAL_ALLOWED_SENDERS: signal_senders,
                         CONF_SIGNAL_ALLOWED_GROUP_IDS: signal_groups,
                         CONF_SIGNAL_MODULE_ID: str(
@@ -683,6 +723,16 @@ class AutoPrintOptionsFlow(OptionsFlow):
         current_signal_groups = options.get(
             CONF_SIGNAL_ALLOWED_GROUP_IDS, DEFAULT_SIGNAL_ALLOWED_GROUP_IDS
         )
+        current_print_types = options.get(CONF_PRINT_TYPES, DEFAULT_PRINT_TYPES)
+        print_type_choices = {
+            name: print_profile_label(name)
+            for name in profile_names(current_print_types)
+        }
+        current_default_print_type = normalize_print_type(
+            options.get(CONF_DEFAULT_PRINT_TYPE, DEFAULT_PRINT_TYPE)
+        )
+        if current_default_print_type not in print_type_choices:
+            current_default_print_type = DEFAULT_PRINT_TYPE
         current_schedule_days = _schedule_days_to_text(
             options.get(CONF_SCHEDULE_DAYS, DEFAULT_SCHEDULE_DAYS)
         )
@@ -739,8 +789,19 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 default=options.get(CONF_COLLATE, DEFAULT_COLLATE),
             ): bool,
             vol.Required(
+                CONF_DEFAULT_PRINT_TYPE,
+                default=current_default_print_type,
+            ): vol.In(print_type_choices),
+            vol.Optional(
+                CONF_PRINT_TYPES,
+                default="\n".join(current_print_types),
+            ): str,
+            vol.Required(
                 CONF_SIGNAL_ENABLED,
-                default=options.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED),
+                default=(
+                    options.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED)
+                    and signal_rest_detected
+                ),
             ): bool,
             vol.Optional(
                 CONF_SIGNAL_MODULE_ID,

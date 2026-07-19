@@ -384,7 +384,13 @@ class SignalPendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEnt
         visible_jobs = jobs[:_MAX_DISPLAYED_PENDING_JOBS]
         opts = self._entry.options
         return {
-            "signal_enabled": opts.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED),
+            "signal_enabled": self.coordinator._signal_enabled,
+            "signal_enabled_configured": opts.get(
+                CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED
+            ),
+            "signal_rest_integration_detected": (
+                self.coordinator.signal_rest_integration_detected
+            ),
             "signal_module_id": opts.get(
                 CONF_SIGNAL_MODULE_ID, DEFAULT_SIGNAL_MODULE_ID
             ),
