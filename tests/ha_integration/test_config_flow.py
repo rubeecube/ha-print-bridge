@@ -20,7 +20,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.print_bridge.const import CONF_ALLOWED_SENDERS, DOMAIN
+from custom_components.print_bridge.const import (
+    CONF_ALLOWED_SENDERS,
+    CONF_SIGNAL_ENABLED,
+    DOMAIN,
+)
 
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_cups_session
 
@@ -513,6 +517,36 @@ async def test_options_flow_empty_senders_means_accept_all(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["allowed_senders"] == []
+
+
+async def test_options_flow_forces_signal_disabled_without_signal_rest(
+    hass: HomeAssistant,
+    mock_coordinator_update,
+) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CONFIG_DATA,
+        options={**MOCK_OPTIONS, CONF_SIGNAL_ENABLED: True},
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "allowed_senders": "sender@example.com",
+            "duplex_mode": "two-sided-long-edge",
+            "booklet_patterns": "",
+            "auto_delete": True,
+            "queue_folder": "/tmp/q",
+            CONF_SIGNAL_ENABLED: True,
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_SIGNAL_ENABLED] is False
 
 
 async def test_options_flow_rejects_invalid_schedule_days(

@@ -40,7 +40,9 @@
     "error": {
       "invalid_time_format": "Enter a valid time in HH:MM format (e.g. 07:00 or 22:30).",
       "invalid_schedule_days": "Enter valid weekdays, such as mon, tue, friday, or sunday.",
-      "invalid_template": "Enter a valid Home Assistant template."
+      "invalid_template": "Enter a valid Home Assistant template.",
+      "invalid_print_types": "Enter valid print type lines, for example weekly=booklet=true copies=2.",
+      "unknown_print_type": "Choose a default print type that exists."
     },
     "step": {
       "init": {
@@ -58,6 +60,8 @@
           "raster_dpi": "Raster DPI",
           "reverse_order": "Reverse one-sided page order",
           "collate": "Collate copies",
+          "default_print_type": "Default Print Type",
+          "print_types": "Custom Print Types",
           "email_action_after_print": "Email Action after Printing",
           "email_archive_folder": "Archive Folder (for Move action)",
           "notify_on_failure": "Notify when print fails",
@@ -80,6 +84,8 @@
           "raster_dpi": "DPI used only when direct IPP printing must convert PDFs to PWG Raster or JPEG. Lower values are faster and create smaller jobs; 150 is the fast default.",
           "reverse_order": "When enabled, one-sided jobs are submitted last page first so page 1 ends on top. Duplex and booklet jobs keep their imposed page order.",
           "collate": "When enabled, multi-copy jobs are requested as collated copies by default.",
+          "default_print_type": "Named print type used for pending Signal jobs before the sender overrides settings. Built-ins are Normal, Simplex, Duplex, Booklet, and Draft.",
+          "print_types": "Optional custom print type lines. Example: weekly=booklet=true copies=2 media=a4",
           "email_action_after_print": "What to do with the email in your mailbox after the PDF is printed.",
           "email_archive_folder": "IMAP folder to move emails to when 'Move to archive folder' is selected (e.g. INBOX/Printed). Created automatically by most servers.",
           "notify_on_failure": "Send a Home Assistant notification when a print job fails.",
@@ -111,7 +117,8 @@
       "imap_account":             { "name": "IMAP Account" },
       "target_printer":           { "name": "Target Printer" },
       "default_duplex_mode":      { "name": "Default Duplex Mode" },
-      "email_action_after_print": { "name": "Email Action after Print" }
+      "email_action_after_print": { "name": "Email Action after Print" },
+      "default_print_type":       { "name": "Default Print Type" }
     },
     "switch": {
       "auto_print":            { "name": "Auto Print" },
@@ -129,6 +136,7 @@
       "queue_folder":          { "name": "Queue Folder" },
       "email_archive_folder":  { "name": "Email Archive Folder" },
       "status_reply_notify_service": { "name": "Status Reply Notify Service" },
+      "print_types":           { "name": "Custom Print Types" },
       "schedule_start":        { "name": "Schedule Start" },
       "schedule_end":          { "name": "Schedule End" },
       "schedule_days":         { "name": "Schedule Days" },

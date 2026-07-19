@@ -1,6 +1,11 @@
 """Constants for the Print Bridge integration."""
 
 DOMAIN = "print_bridge"
+SIGNAL_REST_INTEGRATION_DOMAIN = "signal_messenger"
+SIGNAL_REST_COMPONENTS: tuple[str, ...] = (
+    SIGNAL_REST_INTEGRATION_DOMAIN,
+    f"{SIGNAL_REST_INTEGRATION_DOMAIN}.notify",
+)
 
 # ---------------------------------------------------------------------------
 # Config-entry keys — set once during initial setup (printer only)
@@ -34,6 +39,8 @@ CONF_STATUS_REPLY_NOTIFY_SERVICE = "status_reply_notify_service"
 CONF_RASTER_DPI = "raster_dpi"                     # direct IPP raster conversion DPI
 CONF_REVERSE_ORDER = "reverse_order"               # reverse one-sided page order
 CONF_COLLATE = "collate"                           # collate multi-copy jobs
+CONF_DEFAULT_PRINT_TYPE = "default_print_type"     # selected named print profile
+CONF_PRINT_TYPES = "print_types"                   # custom named print profile lines
 CONF_SIGNAL_ENABLED = "signal_enabled"             # receive Signal document attachments
 CONF_SIGNAL_MODULE_ID = "signal_module_id"
 CONF_SIGNAL_REST_URL = "signal_rest_url"
@@ -67,6 +74,8 @@ DEFAULT_STATUS_REPLY_NOTIFY_SERVICE = ""
 DEFAULT_RASTER_DPI = 150
 DEFAULT_REVERSE_ORDER = True
 DEFAULT_COLLATE = True
+DEFAULT_PRINT_TYPE = "normal"
+DEFAULT_PRINT_TYPES: tuple[str, ...] = ()
 DEFAULT_SIGNAL_ENABLED = False
 DEFAULT_SIGNAL_MODULE_ID = "019ef0ac-4dcf-72b2-b5ec-3ff077450a00"
 DEFAULT_SIGNAL_REST_URL = ""
@@ -140,6 +149,7 @@ SELECT_IMAP_ACCOUNT = "imap_account"
 SELECT_TARGET_PRINTER = "target_printer"
 SELECT_DUPLEX_MODE = "default_duplex_mode"
 SELECT_EMAIL_ACTION = "email_action_after_print"
+SELECT_DEFAULT_PRINT_TYPE = "default_print_type"
 SELECT_SIGNAL_CONFIRMATION_MODE = "signal_confirmation_mode"
 SWITCH_AUTO_PRINT_ENABLED = "auto_print"
 SWITCH_AUTO_DELETE = "delete_after_printing"
@@ -155,6 +165,7 @@ TEXT_BOOKLET_PATTERNS = "booklet_patterns"
 TEXT_QUEUE_FOLDER = "queue_folder"
 TEXT_EMAIL_ARCHIVE_FOLDER = "email_archive_folder"
 TEXT_STATUS_REPLY_NOTIFY_SERVICE = "status_reply_notify_service"
+TEXT_PRINT_TYPES = "print_types"
 TEXT_SIGNAL_MODULE_ID = "signal_module_id"
 TEXT_SIGNAL_REST_URL = "signal_rest_url"
 TEXT_SIGNAL_ACCOUNT = "signal_account"

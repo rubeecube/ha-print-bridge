@@ -40,7 +40,9 @@
     "error": {
       "invalid_time_format": "Enter a valid time in HH:MM format (e.g. 07:00 or 22:30).",
       "invalid_schedule_days": "Enter valid weekdays, such as mon, tue, friday, or sunday.",
-      "invalid_template": "Enter a valid Home Assistant template."
+      "invalid_template": "Enter a valid Home Assistant template.",
+      "invalid_print_types": "Enter valid print type lines, for example weekly=booklet=true copies=2.",
+      "unknown_print_type": "Choose a default print type that exists."
     },
     "step": {
       "init": {
@@ -58,6 +60,8 @@
           "raster_dpi": "Raster DPI",
           "reverse_order": "Reverse one-sided page order",
           "collate": "Collate copies",
+          "default_print_type": "Default Print Type",
+          "print_types": "Custom Print Types",
           "signal_enabled": "Enable Signal intake",
           "signal_module_id": "Signal Module ID",
           "signal_rest_url": "Signal REST URL",
@@ -88,7 +92,9 @@
           "raster_dpi": "DPI used only when direct IPP printing must convert PDFs to PWG Raster or JPEG. Lower values are faster and create smaller jobs; 150 is the fast default.",
           "reverse_order": "When enabled, one-sided jobs are submitted last page first so page 1 ends on top. Duplex and booklet jobs keep their imposed page order.",
           "collate": "When enabled, multi-copy jobs are requested as collated copies by default.",
-          "signal_enabled": "When ON, Print Bridge receives Signal document attachments from the configured Signal REST module and waits for confirmation before printing.",
+          "default_print_type": "Named print type used for pending Signal jobs before the sender overrides settings. Built-ins are Normal, Simplex, Duplex, Booklet, and Draft.",
+          "print_types": "Optional custom print type lines. Example: weekly=booklet=true copies=2 media=a4",
+          "signal_enabled": "When ON, Print Bridge receives Signal document attachments from the configured Signal REST module and waits for confirmation before printing. This stays disabled until Home Assistant has the Signal Messenger integration configured.",
           "signal_module_id": "Identifier of the Signal module used by this integration. Default: 019ef0ac-4dcf-72b2-b5ec-3ff077450a00.",
           "signal_rest_url": "Base URL of the signal-cli-rest-api compatible module, for example http://homeassistant.local:8080.",
           "signal_account": "Registered Signal account/phone number used by the Signal REST module.",
@@ -130,6 +136,7 @@
       "target_printer":           { "name": "Target Printer" },
       "default_duplex_mode":      { "name": "Default Duplex Mode" },
       "email_action_after_print": { "name": "Email Action after Print" },
+      "default_print_type":       { "name": "Default Print Type" },
       "signal_confirmation_mode": { "name": "Signal Confirmation Mode" }
     },
     "switch": {
@@ -149,6 +156,7 @@
       "queue_folder":          { "name": "Queue Folder" },
       "email_archive_folder":  { "name": "Email Archive Folder" },
       "status_reply_notify_service": { "name": "Status Reply Notify Service" },
+      "print_types":           { "name": "Custom Print Types" },
       "signal_module_id":      { "name": "Signal Module ID" },
       "signal_rest_url":       { "name": "Signal REST URL" },
       "signal_account":        { "name": "Signal Account" },

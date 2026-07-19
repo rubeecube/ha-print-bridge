@@ -55,6 +55,7 @@ from .const import (
     CONF_COLLATE,
     CONF_CUPS_URL,
     CONF_DIRECT_PRINTER_URL,
+    CONF_DEFAULT_PRINT_TYPE,
     CONF_DUPLEX_MODE,
     CONF_EMAIL_ACTION,
     CONF_EMAIL_ARCHIVE_FOLDER,
@@ -62,6 +63,7 @@ from .const import (
     CONF_NOTIFY_ON_FAILURE,
     CONF_NOTIFY_ON_SUCCESS,
     CONF_PRINTER_NAME,
+    CONF_PRINT_TYPES,
     CONF_QUEUE_FOLDER,
     CONF_RASTER_DPI,
     CONF_REVERSE_ORDER,
@@ -85,6 +87,8 @@ from .const import (
     CONF_STATUS_REPLY_NOTIFY_SERVICE,
     DEFAULT_AUTO_DELETE,
     DEFAULT_COLLATE,
+    DEFAULT_PRINT_TYPE,
+    DEFAULT_PRINT_TYPES,
     DEFAULT_DUPLEX_MODE,
     DEFAULT_EMAIL_ACTION,
     DEFAULT_EMAIL_ARCHIVE_FOLDER,
@@ -112,10 +116,19 @@ from .const import (
     DOMAIN,
     EVENT_JOB_COMPLETED,
     SCHEDULE_DAYS,
+    SIGNAL_REST_COMPONENTS,
+    SIGNAL_REST_INTEGRATION_DOMAIN,
 )
 from .imap_checker import EmailPreview, preview_mailbox
 from .mail_params import MailPrintParameters, parse_mail_print_parameters
 from .page_order import reverse_pdf_pages
+from .print_profiles import (
+    PrintProfile,
+    merge_print_parameters,
+    normalize_print_type,
+    parse_print_profiles,
+    resolve_default_print_type,
+)
 from .print_handler import (
     build_ipp_packet,
     build_get_printer_attributes_packet,
@@ -189,10 +202,13 @@ _MEDIA_BY_POINTS = (
     ("na_legal_8.5x14in", 612, 1008),
 )
 _SIGNAL_CONFIRM_RE = re.compile(
-    r"(?i)^\s*(?:print|confirm|yes)\s+(?P<token>[a-z0-9_-]{4,64})\b"
+    r"(?i)^\s*(?:print|confirm|yes)\s+(?P<token>[a-z0-9_-]{4,64})\b(?P<settings>.*)$"
 )
 _SIGNAL_CANCEL_RE = re.compile(
     r"(?i)^\s*(?:cancel|stop|no)\s+(?P<token>[a-z0-9_-]{4,64})\b"
+)
+_SIGNAL_SET_RE = re.compile(
+    r"(?i)^\s*(?:set|settings)\s+(?P<token>[a-z0-9_-]{4,64})\b(?P<settings>.*)$"
 )
 _SIGNAL_OPTION_KEYS = {
     CONF_SIGNAL_ENABLED,
@@ -733,6 +749,7 @@ class SignalPendingJob:
     group_name: str | None
     text: str
     attachments: tuple[SignalAttachment, ...]
+    print_type: str = DEFAULT_PRINT_TYPE
     skipped_attachments: list[str] = field(default_factory=list)
     duplex_override: str | None = None
     booklet_override: bool | None = None
@@ -742,6 +759,7 @@ class SignalPendingJob:
     media: str | None = None
     raster_dpi: int | None = None
     reverse_order: bool | None = None
+    effective_settings: dict[str, Any] = field(default_factory=dict)
     received_at: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
@@ -770,6 +788,7 @@ class SignalPendingJob:
             "message_id": self.message_id,
             "received_at": self.received_at,
             "expires_at": self.expires_at,
+            "print_type": self.print_type,
             "duplex": self.duplex_override,
             "booklet": self.booklet_override,
             "copies": self.copies,
@@ -778,6 +797,7 @@ class SignalPendingJob:
             "media": self.media,
             "raster_dpi": self.raster_dpi,
             "reverse_order": self.reverse_order,
+            "effective_settings": dict(self.effective_settings),
             "attachments": [
                 {
                     "filename": item.filename,
@@ -932,6 +952,35 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return self._collate if collate is None else bool(collate)
 
     @property
+    def _print_profiles(self) -> dict[str, PrintProfile]:
+        profiles, errors = parse_print_profiles(
+            self._entry.options.get(CONF_PRINT_TYPES, DEFAULT_PRINT_TYPES)
+        )
+        if errors:
+            logger.warning(
+                "Ignoring invalid Print Bridge print profile configuration: %s",
+                "; ".join(errors),
+            )
+        return profiles
+
+    @property
+    def _default_print_type(self) -> str:
+        profiles = self._print_profiles
+        return resolve_default_print_type(
+            self._entry.options.get(CONF_DEFAULT_PRINT_TYPE, DEFAULT_PRINT_TYPE),
+            profiles,
+        )
+
+    def print_profile_names(self) -> list[str]:
+        """Return valid print profile names in UI display order."""
+        profiles = self._print_profiles
+        builtins = ["normal", "simplex", "duplex", "booklet", "draft"]
+        return [
+            *[name for name in builtins if name in profiles],
+            *sorted(name for name in profiles if name not in builtins),
+        ]
+
+    @property
     def _allowed_senders(self) -> list[str]:
         senders: list[str] = []
         for sender in self._entry.options.get(CONF_ALLOWED_SENDERS, []):
@@ -1059,8 +1108,17 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
     @property
     def _signal_enabled(self) -> bool:
-        return bool(
+        configured = bool(
             self._entry.options.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED)
+        )
+        return configured and self.signal_rest_integration_detected
+
+    @property
+    def signal_rest_integration_detected(self) -> bool:
+        """True when HA has the Signal Messenger REST integration configured."""
+        return bool(
+            self.hass.config_entries.async_entries(SIGNAL_REST_INTEGRATION_DOMAIN)
+            or any(component in self.hass.config.components for component in SIGNAL_REST_COMPONENTS)
         )
 
     @property
@@ -1133,6 +1191,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return self._signal_confirmation_mode in {"ha_and_signal", "signal_only"}
 
     def _signal_client(self) -> SignalRestClient:
+        if not self.signal_rest_integration_detected:
+            raise RuntimeError(
+                "Configure the Home Assistant Signal Messenger integration before "
+                "using Print Bridge Signal intake."
+            )
         if not self._signal_rest_url or not self._signal_account:
             raise RuntimeError(
                 "Signal REST URL and Signal account must be configured first."
@@ -1334,11 +1397,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         message: SignalMessage,
         client: SignalRestClient,
     ) -> bool:
-        """Handle `print <token>` or `cancel <token>` replies."""
+        """Handle `set <token>`, `print <token>`, or `cancel <token>` replies."""
         text = message.text or ""
+        update = _SIGNAL_SET_RE.match(text)
         confirm = _SIGNAL_CONFIRM_RE.match(text)
         cancel = _SIGNAL_CANCEL_RE.match(text)
-        if not confirm and not cancel:
+        if not update and not confirm and not cancel:
             return False
         if not self._signal_message_allowed(message):
             logger.info(
@@ -1347,7 +1411,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 message.group_id,
             )
             return True
-        token = (confirm or cancel).group("token")  # type: ignore[union-attr]
+        command_match = update or confirm or cancel
+        token = command_match.group("token")  # type: ignore[union-attr]
         job = self._find_signal_pending_job(token=token)
         if job is None:
             await self._async_send_signal_message(
@@ -1363,6 +1428,28 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 "Print Bridge: this token belongs to another Signal sender or group.",
             )
             return True
+        if update or confirm:
+            settings_text = (command_match.groupdict().get("settings") or "").strip()
+            if settings_text:
+                params = parse_mail_print_parameters("", f"PB: {settings_text}")
+                errors = self._signal_print_param_errors(params)
+                if errors:
+                    await self._async_send_signal_message(
+                        client,
+                        [message.group_id or message.sender],
+                        "Print Bridge: invalid print settings:\n"
+                        + "\n".join(f"- {error}" for error in errors),
+                    )
+                    return True
+                self._apply_signal_print_params(job, params)
+            if update:
+                await self.async_request_refresh()
+                await self._async_send_signal_message(
+                    client,
+                    [job.reply_recipient or ""],
+                    self._format_signal_pending_reply(job),
+                )
+                return True
         if cancel:
             await self.async_cancel_signal_job(token=token, client=client)
         else:
@@ -1388,6 +1475,110 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         }
         return bool(message_senders & job_senders)
 
+    def _signal_print_param_errors(self, params: MailPrintParameters) -> list[str]:
+        """Return validation errors for Signal print settings."""
+        errors = list(params.errors)
+        if params.print_type and params.print_type not in self._print_profiles:
+            errors.append(
+                f"Unknown print type '{params.print_type}'. Valid types: "
+                + ", ".join(self.print_profile_names())
+            )
+        return errors
+
+    def _apply_signal_print_params(
+        self,
+        job: SignalPendingJob,
+        params: MailPrintParameters,
+    ) -> None:
+        """Patch a pending Signal job with explicit print setting overrides."""
+        if params.print_type:
+            job.print_type = normalize_print_type(params.print_type)
+        if params.duplex is not None:
+            job.duplex_override = params.duplex
+        if params.booklet is not None:
+            job.booklet_override = params.booklet
+        if params.copies is not None:
+            job.copies = params.copies
+        if params.collate is not None:
+            job.collate = params.collate
+        if params.orientation is not None:
+            job.orientation = params.orientation
+        if params.media is not None:
+            job.media = params.media
+        if params.raster_dpi is not None:
+            job.raster_dpi = params.raster_dpi
+        if params.reverse_order is not None:
+            job.reverse_order = params.reverse_order
+        self._refresh_signal_job_effective_settings(job)
+
+    def _signal_job_override_params(self, job: SignalPendingJob) -> MailPrintParameters:
+        """Return explicit pending-job overrides as MailPrintParameters."""
+        return MailPrintParameters(
+            print_type=job.print_type,
+            duplex=job.duplex_override,
+            booklet=job.booklet_override,
+            copies=job.copies,
+            collate=job.collate,
+            orientation=job.orientation,
+            media=job.media,
+            raster_dpi=job.raster_dpi,
+            reverse_order=job.reverse_order,
+        )
+
+    def _signal_job_print_params(self, job: SignalPendingJob) -> MailPrintParameters:
+        """Return profile settings merged with pending-job overrides."""
+        profiles = self._print_profiles
+        profile = profiles.get(job.print_type) or profiles[self._default_print_type]
+        return merge_print_parameters(
+            profile.params,
+            self._signal_job_override_params(job),
+        )
+
+    def _signal_job_effective_settings(self, job: SignalPendingJob) -> dict[str, Any]:
+        """Return resolved settings that would be used if the job printed now."""
+        params = self._signal_job_print_params(job)
+        booklet = (
+            params.booklet
+            if params.booklet is not None
+            else any(
+                is_booklet_job(item.filename, self._booklet_patterns)
+                for item in job.attachments
+            )
+        )
+        orientation = _orientation_for_job(bool(booklet), params.orientation)
+        raster_dpi = _normalise_raster_dpi(params.raster_dpi or self._raster_dpi)
+        duplex = params.duplex or self._duplex_mode
+        if booklet:
+            duplex = "two-sided-short-edge"
+        return {
+            "print_type": job.print_type,
+            "duplex": duplex,
+            "booklet": bool(booklet),
+            "copies": params.copies or 1,
+            "collate": self._resolve_collate(params.collate),
+            "orientation": orientation or "default",
+            "media": params.media or "default",
+            "raster_dpi": raster_dpi,
+            "reverse_order": self._resolve_reverse_order(params.reverse_order),
+        }
+
+    def _refresh_signal_job_effective_settings(self, job: SignalPendingJob) -> None:
+        job.effective_settings = self._signal_job_effective_settings(job)
+
+    def _format_signal_settings_lines(self, job: SignalPendingJob) -> list[str]:
+        settings = self._signal_job_effective_settings(job)
+        return [
+            f"Type: {settings['print_type']}",
+            f"Duplex: {settings['duplex']}",
+            f"Booklet: {'yes' if settings['booklet'] else 'no'}",
+            f"Copies: {settings['copies']}",
+            f"Collate: {'yes' if settings['collate'] else 'no'}",
+            f"Orientation: {settings['orientation']}",
+            f"Media: {settings['media']}",
+            f"Raster DPI: {settings['raster_dpi']}",
+            f"Reverse order: {'yes' if settings['reverse_order'] else 'no'}",
+        ]
+
     async def _async_create_signal_pending_job(
         self,
         message: SignalMessage,
@@ -1405,12 +1596,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return False
 
         mail_params = parse_mail_print_parameters("", message.text or "")
-        if mail_params.errors:
+        param_errors = self._signal_print_param_errors(mail_params)
+        if param_errors:
             await self._async_send_signal_message(
                 client,
                 [message.group_id or message.sender],
                 "Print Bridge: invalid print parameters: "
-                + "; ".join(mail_params.errors),
+                + "; ".join(param_errors),
             )
             return False
 
@@ -1480,6 +1672,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             group_name=message.group_name,
             text=message.text,
             attachments=tuple(attachments),
+            print_type=mail_params.print_type or self._default_print_type,
             skipped_attachments=skipped,
             duplex_override=mail_params.duplex,
             booklet_override=mail_params.booklet,
@@ -1491,6 +1684,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             reverse_order=mail_params.reverse_order,
             expires_at=expires_at,
         )
+        self._refresh_signal_job_effective_settings(job)
         self._signal_pending_jobs.append(job)
         self._signal_seen_keys.update(dedupe_parts)
         logger.info(
@@ -1521,6 +1715,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                         f"Sender: {job.sender or job.sender_uuid or 'unknown'}\n"
                         f"Group: {job.group_name or job.group_id or 'direct'}\n"
                         f"Token: `{job.token}`\n"
+                        + "\n".join(self._format_signal_settings_lines(job))
+                        + "\n"
                         f"Expires: {job.expires_at}\n\n"
                         "Use service `print_bridge.confirm_signal_job` or reply "
                         f"`print {job.token}` in Signal."
@@ -1538,13 +1734,19 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             skipped = "\n\nSkipped:\n" + "\n".join(
                 f"- {item}" for item in job.skipped_attachments[:10]
             )
+        settings = "\n".join(self._format_signal_settings_lines(job))
+        print_types = ", ".join(self.print_profile_names())
         return (
             "Print Bridge received document(s) waiting for confirmation.\n\n"
             f"Token: {job.token}\n"
             f"Expires: {job.expires_at}\n\n"
+            f"Current settings:\n{settings}\n\n"
             "Reply with:\n"
+            f"set {job.token} type=booklet copies=2\n"
             f"print {job.token}\n"
+            f"print {job.token} type=booklet copies=2\n"
             f"cancel {job.token}\n\n"
+            f"Print types: {print_types}\n\n"
             f"Attachments:\n{attachments}{skipped}"
         )
 
@@ -1565,12 +1767,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self._signal_pending_jobs.remove(job)
 
         summary = await self._async_convert_signal_attachments(job)
-        effective_duplex = job.duplex_override or self._duplex_mode
-        effective_booklet = (
-            job.booklet_override
-            if job.booklet_override is not None
-            else any(is_booklet_job(item.filename, self._booklet_patterns) for item in job.attachments)
-        )
+        params = self._signal_job_print_params(job)
+        effective_settings = self._signal_job_effective_settings(job)
+        effective_duplex = str(effective_settings["duplex"])
+        effective_booklet = bool(effective_settings["booklet"])
 
         if not summary.converted:
             error = "No Signal attachments could be converted"
@@ -1580,13 +1780,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 error=error,
                 sender=job.sender,
                 duplex=effective_duplex,
-                booklet=bool(effective_booklet),
-                copies=job.copies or 1,
-                collate=self._resolve_collate(job.collate),
-                orientation=job.orientation,
-                media=job.media,
-                raster_dpi=job.raster_dpi,
-                reverse_order=self._resolve_reverse_order(job.reverse_order),
+                booklet=effective_booklet,
+                copies=int(effective_settings["copies"]),
+                collate=bool(effective_settings["collate"]),
+                orientation=str(effective_settings["orientation"]),
+                media=str(effective_settings["media"]),
+                raster_dpi=int(effective_settings["raster_dpi"]),
+                reverse_order=bool(effective_settings["reverse_order"]),
                 attachments=[],
                 skipped_attachments=[*job.skipped_attachments, *summary.skipped],
                 merged_attachment_count=0,
@@ -1605,13 +1805,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 job.filename,
                 merged_pdf,
                 effective_duplex,
-                bool(effective_booklet),
-                copies=job.copies,
-                collate=job.collate,
-                orientation=job.orientation,
-                media=job.media,
-                raster_dpi=job.raster_dpi,
-                reverse_order=job.reverse_order,
+                effective_booklet,
+                copies=params.copies,
+                collate=params.collate,
+                orientation=params.orientation,
+                media=params.media,
+                raster_dpi=params.raster_dpi,
+                reverse_order=params.reverse_order,
             )
             result.sender = job.sender
             result.source = "signal"
@@ -1720,6 +1920,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             raise HomeAssistantError(
                 "Configure Signal REST URL and Signal account before checking groups."
             )
+        if not self.signal_rest_integration_detected:
+            raise HomeAssistantError(
+                "Configure the Home Assistant Signal Messenger integration before "
+                "checking Signal groups."
+            )
         groups = await self._signal_client().list_groups()
         self._signal_groups = groups
         self._signal_groups_checked_at = datetime.now().isoformat(timespec="seconds")
@@ -1742,6 +1947,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             f"Result: {status}",
             f"Status code: {result.status_code or 'n/a'}",
             f"Status: {result.status or result.error or 'accepted'}",
+            f"Print type: {job.print_type}",
             f"Duplex: {result.duplex or 'default'}",
             f"Booklet: {'yes' if result.booklet else 'no'}",
             f"Copies: {result.copies or 1}",

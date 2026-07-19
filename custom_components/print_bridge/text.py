@@ -20,6 +20,7 @@ from .const import (
     CONF_BOOKLET_PATTERNS,
     CONF_EMAIL_ARCHIVE_FOLDER,
     CONF_FOLDER_FILTER,
+    CONF_PRINT_TYPES,
     CONF_QUEUE_FOLDER,
     CONF_SCHEDULE_DAYS,
     CONF_SCHEDULE_END,
@@ -32,6 +33,7 @@ from .const import (
     CONF_SIGNAL_REST_URL,
     CONF_STATUS_REPLY_NOTIFY_SERVICE,
     DEFAULT_EMAIL_ARCHIVE_FOLDER,
+    DEFAULT_PRINT_TYPES,
     DEFAULT_QUEUE_FOLDER,
     DEFAULT_SCHEDULE_DAYS,
     DEFAULT_SCHEDULE_END,
@@ -47,6 +49,7 @@ from .const import (
     TEXT_BOOKLET_PATTERNS,
     TEXT_EMAIL_ARCHIVE_FOLDER,
     TEXT_FOLDER_FILTER,
+    TEXT_PRINT_TYPES,
     TEXT_QUEUE_FOLDER,
     TEXT_SCHEDULE_DAYS,
     TEXT_SCHEDULE_END,
@@ -60,6 +63,7 @@ from .const import (
     TEXT_STATUS_REPLY_NOTIFY_SERVICE,
 )
 from .coordinator import AutoPrintCoordinator
+from .print_profiles import parse_print_profiles
 from .sensor import _device_info
 
 _HHMM_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -114,6 +118,14 @@ def _format_list(value: Any) -> str:
     if not value:
         return ""
     return "\n".join(str(item) for item in value)
+
+
+def _parse_print_types(value: str) -> list[str]:
+    lines = _split_lines(value)
+    _profiles, errors = parse_print_profiles(lines)
+    if errors:
+        raise HomeAssistantError("Invalid print types: " + "; ".join(errors))
+    return lines
 
 
 def _parse_schedule_days(value: str) -> list[str]:
@@ -180,6 +192,14 @@ _TEXTS: tuple[_OptionText, ...] = (
         "mdi:email-sync-outline",
         lambda value: value.strip(),
         lambda value: str(value or ""),
+    ),
+    _OptionText(
+        CONF_PRINT_TYPES,
+        TEXT_PRINT_TYPES,
+        DEFAULT_PRINT_TYPES,
+        "mdi:printer-settings",
+        _parse_print_types,
+        _format_list,
     ),
     _OptionText(
         CONF_SIGNAL_MODULE_ID,
