@@ -519,7 +519,7 @@ async def test_options_flow_empty_senders_means_accept_all(
     assert entry.options["allowed_senders"] == []
 
 
-async def test_options_flow_forces_signal_disabled_without_signal_rest(
+async def test_options_flow_preserves_signal_enabled_for_runtime_rest_probe(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
@@ -546,7 +546,7 @@ async def test_options_flow_forces_signal_disabled_without_signal_rest(
     )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options[CONF_SIGNAL_ENABLED] is False
+    assert entry.options[CONF_SIGNAL_ENABLED] is True
 
 
 async def test_options_flow_rejects_invalid_schedule_days(

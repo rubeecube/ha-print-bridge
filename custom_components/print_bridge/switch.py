@@ -143,19 +143,20 @@ class OptionSwitch(CoordinatorEntity[AutoPrintCoordinator], SwitchEntity):
     @property
     def available(self) -> bool:
         if self._description.key == CONF_SIGNAL_ENABLED:
-            return self.coordinator.signal_rest_integration_detected
+            return self.coordinator.signal_rest_configured
         return super().available
 
     async def async_turn_on(self, **kwargs) -> None:
         if (
             self._description.key == CONF_SIGNAL_ENABLED
-            and not self.coordinator.signal_rest_integration_detected
+            and not self.coordinator.signal_rest_configured
         ):
             raise HomeAssistantError(
-                "Configure the Home Assistant Signal Messenger integration before "
-                "enabling Signal intake."
+                "Configure Signal REST URL and Signal account before enabling Signal intake."
             )
         self.coordinator.set_option(self._description.key, True)
+        if self._description.key == CONF_SIGNAL_ENABLED:
+            await self.coordinator.async_sync_signal_receiver()
 
     async def async_turn_off(self, **kwargs) -> None:
         self.coordinator.set_option(self._description.key, False)

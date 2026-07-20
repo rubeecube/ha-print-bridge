@@ -43,7 +43,6 @@ from custom_components.print_bridge.const import (
     CONF_SIGNAL_ENABLED,
     CONF_SIGNAL_REST_URL,
     DOMAIN,
-    SIGNAL_REST_INTEGRATION_DOMAIN,
 )
 from custom_components.print_bridge.coordinator import (
     AutoPrintCoordinator,
@@ -99,12 +98,6 @@ async def _setup_coordinator(
             signal_rest_detected = bool(
                 (options or {}).get(CONF_SIGNAL_ENABLED, False)
             )
-        if signal_rest_detected:
-            signal_entry = MockConfigEntry(
-                domain=SIGNAL_REST_INTEGRATION_DOMAIN,
-                data={},
-            )
-            signal_entry.add_to_hass(hass)
         entry = MockConfigEntry(
             domain=DOMAIN,
             data=data if data is not None else MOCK_CONFIG_DATA,
@@ -113,6 +106,7 @@ async def _setup_coordinator(
         entry.add_to_hass(hass)
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
+        entry.runtime_data._signal_rest_detected = signal_rest_detected
     return entry, entry.runtime_data
 
 
@@ -614,7 +608,7 @@ async def test_signal_document_creates_pending_job_without_printing(
     mock_send.assert_not_awaited()
 
 
-async def test_signal_payload_is_ignored_until_signal_rest_integration_detected(
+async def test_signal_payload_is_ignored_until_signal_rest_module_detected(
     hass: HomeAssistant,
 ) -> None:
     with patch(
@@ -638,10 +632,9 @@ async def test_signal_payload_is_ignored_until_signal_rest_integration_detected(
     assert coordinator._signal_enabled is False
 
 
-async def test_signal_payload_accepts_legacy_signal_notify_component(
+async def test_signal_sync_probes_rest_module_before_starting_receiver(
     hass: HomeAssistant,
 ) -> None:
-    hass.config.components.add("signal_messenger.notify")
     with patch(
         "custom_components.print_bridge.coordinator.AutoPrintCoordinator.async_sync_signal_receiver",
         new=AsyncMock(),
@@ -652,15 +645,34 @@ async def test_signal_payload_accepts_legacy_signal_notify_component(
             signal_rest_detected=False,
         )
 
-    with patch.object(coordinator, "async_request_refresh", new=AsyncMock()):
-        handled = await coordinator.async_process_signal_payload(
-            _signal_payload(filename="legacy.pdf"),
-            client=AsyncMock(),
+    with (
+        patch.object(coordinator, "async_check_signal_rest", new=AsyncMock(return_value=True)) as mock_check,
+        patch.object(coordinator, "_async_signal_receiver_loop", new=AsyncMock()) as mock_loop,
+    ):
+        await coordinator.async_sync_signal_receiver()
+        await hass.async_block_till_done()
+
+    mock_check.assert_awaited_once()
+    mock_loop.assert_awaited_once()
+
+
+async def test_signal_check_groups_reports_rest_probe_error(
+    hass: HomeAssistant,
+) -> None:
+    with patch(
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator.async_sync_signal_receiver",
+        new=AsyncMock(),
+    ):
+        _, coordinator = await _setup_coordinator(
+            hass,
+            options=_SIGNAL_OPTIONS,
+            signal_rest_detected=False,
         )
 
-    assert handled == 1
-    assert coordinator._signal_pending_jobs[0].filename == "legacy.pdf"
-    assert coordinator._signal_enabled is True
+    with patch.object(coordinator, "async_check_signal_rest", new=AsyncMock(return_value=False)):
+        coordinator._signal_rest_error = "HTTP 503"
+        with pytest.raises(HomeAssistantError, match="HTTP 503"):
+            await coordinator.async_check_signal_groups()
 
 
 async def test_confirm_signal_job_prints_pending_document(
@@ -881,6 +893,57 @@ async def test_signal_group_filter_rejects_other_groups(
     with patch.object(coordinator, "async_request_refresh", new=AsyncMock()):
         handled = await coordinator.async_process_signal_payload(
             _signal_payload(group_id="other"),
+            client=AsyncMock(),
+        )
+
+    assert handled == 0
+    assert coordinator._signal_pending_jobs == []
+
+
+async def test_signal_group_filter_accepts_configured_group_name(
+    hass: HomeAssistant,
+) -> None:
+    options = {
+        **_SIGNAL_OPTIONS,
+        CONF_SIGNAL_ALLOWED_GROUP_IDS: ["Print Group"],
+    }
+    with patch(
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator.async_sync_signal_receiver",
+        new=AsyncMock(),
+    ):
+        _, coordinator = await _setup_coordinator(hass, options=options)
+    coordinator._signal_groups = [{"id": "group.print", "name": "Print Group"}]
+
+    with patch.object(coordinator, "async_request_refresh", new=AsyncMock()):
+        handled = await coordinator.async_process_signal_payload(
+            _signal_payload(group_id="print"),
+            client=AsyncMock(),
+        )
+
+    assert handled == 1
+    assert coordinator._signal_pending_jobs[0].filename == "document.pdf"
+
+
+async def test_signal_group_filter_rejects_ambiguous_configured_group_name(
+    hass: HomeAssistant,
+) -> None:
+    options = {
+        **_SIGNAL_OPTIONS,
+        CONF_SIGNAL_ALLOWED_GROUP_IDS: ["Print Group"],
+    }
+    with patch(
+        "custom_components.print_bridge.coordinator.AutoPrintCoordinator.async_sync_signal_receiver",
+        new=AsyncMock(),
+    ):
+        _, coordinator = await _setup_coordinator(hass, options=options)
+    coordinator._signal_groups = [
+        {"id": "group.print", "name": "Print Group"},
+        {"id": "group.other", "name": "Print Group"},
+    ]
+
+    with patch.object(coordinator, "async_request_refresh", new=AsyncMock()):
+        handled = await coordinator.async_process_signal_payload(
+            _signal_payload(group_id="print"),
             client=AsyncMock(),
         )
 

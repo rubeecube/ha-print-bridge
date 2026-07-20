@@ -34,7 +34,9 @@ from custom_components.print_bridge.const import (
     CONF_SELECTED_IMAP_ENTRY_ID,
     CONF_SELECTED_PRINTER_ENTRY_ID,
     CONF_SCHEDULE_START,
+    CONF_SIGNAL_ACCOUNT,
     CONF_SIGNAL_ENABLED,
+    CONF_SIGNAL_REST_URL,
     BUTTON_TEST_PAGE,
     CONF_DEFAULT_PRINT_TYPE,
     CONF_PRINT_TYPES,
@@ -417,17 +419,23 @@ async def test_reverse_order_switch_persists_option(hass: HomeAssistant) -> None
     assert hass.states.get(switch_id).state == "off"
 
 
-async def test_signal_switch_unavailable_without_signal_rest_integration(
+async def test_signal_switch_available_when_rest_configured_but_off_until_detected(
     hass: HomeAssistant,
 ) -> None:
     entry = await _setup(
         hass,
         AutoPrintData(queue_depth=0, printer_online=True),
-        options={**MOCK_OPTIONS, CONF_SIGNAL_ENABLED: True},
+        options={
+            **MOCK_OPTIONS,
+            CONF_SIGNAL_ENABLED: True,
+            CONF_SIGNAL_REST_URL: "http://signal.local:8080",
+            CONF_SIGNAL_ACCOUNT: "+15550000",
+        },
     )
+    entry.runtime_data._signal_rest_detected = False
     switch_id = _entity_id(hass, entry, SWITCH_SIGNAL_ENABLED)
 
-    assert hass.states.get(switch_id).state == "unavailable"
+    assert hass.states.get(switch_id).state == "off"
     assert entry.runtime_data._signal_enabled is False
 
 

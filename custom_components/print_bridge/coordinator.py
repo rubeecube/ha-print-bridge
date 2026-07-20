@@ -272,6 +272,16 @@ def _normalise_signal_group_id(value: str) -> str:
     return f"group.{group_id}"
 
 
+def _normalise_signal_group_name(value: str) -> str:
+    """Return a stable comparison key for Signal display group names."""
+    return " ".join(str(value or "").strip().split()).casefold()
+
+
+def _looks_like_signal_group_id(value: str) -> bool:
+    """Return True for explicit Signal group recipient IDs."""
+    return str(value or "").strip().casefold().startswith("group.")
+
+
 def _split_notify_service(value: str) -> tuple[str, str]:
     """Return (domain, service) for a notify service reference."""
     service_ref = value.strip()
@@ -863,6 +873,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self._signal_seen_keys: set[str] = set()
         self._signal_groups: list[dict[str, Any]] = []
         self._signal_groups_checked_at: str | None = None
+        self._signal_group_resolution_error: str | None = None
+        self._signal_rest_detected: bool = False
+        self._signal_rest_checked_at: str | None = None
+        self._signal_rest_error: str | None = None
         self._last_schedule_state: bool | None = None  # track open↔closed transitions
         # Deduplication: maps "uid:part_key" → datetime of last print to prevent
         # multiple blueprints firing on the same attachment from double-printing.
@@ -1108,18 +1122,40 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
     @property
     def _signal_enabled(self) -> bool:
+        return self._signal_enabled_configured and self.signal_rest_integration_detected
+
+    @property
+    def _signal_enabled_configured(self) -> bool:
         configured = bool(
             self._entry.options.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED)
         )
-        return configured and self.signal_rest_integration_detected
+        return configured
+
+    @property
+    def signal_rest_configured(self) -> bool:
+        """True when the options contain enough data to probe Signal REST."""
+        return bool(self._signal_rest_url and self._signal_account)
 
     @property
     def signal_rest_integration_detected(self) -> bool:
-        """True when HA has the Signal Messenger REST integration configured."""
+        """True after the configured Signal REST module has answered a probe."""
+        return self._signal_rest_detected
+
+    @property
+    def signal_messenger_integration_detected(self) -> bool:
+        """True when HA has the legacy Signal Messenger integration loaded."""
         return bool(
             self.hass.config_entries.async_entries(SIGNAL_REST_INTEGRATION_DOMAIN)
             or any(component in self.hass.config.components for component in SIGNAL_REST_COMPONENTS)
         )
+
+    @property
+    def signal_rest_checked_at(self) -> str | None:
+        return self._signal_rest_checked_at
+
+    @property
+    def signal_rest_error(self) -> str | None:
+        return self._signal_rest_error
 
     @property
     def _signal_module_id(self) -> str:
@@ -1154,15 +1190,73 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         }
 
     @property
-    def _signal_allowed_group_ids(self) -> set[str]:
+    def _signal_allowed_group_values(self) -> list[str]:
         values = self._entry.options.get(
             CONF_SIGNAL_ALLOWED_GROUP_IDS, DEFAULT_SIGNAL_ALLOWED_GROUP_IDS
         )
+        return [str(value).strip() for value in values if str(value).strip()]
+
+    @property
+    def _signal_allowed_group_ids(self) -> set[str]:
         return {
-            _normalise_signal_group_id(str(value))
-            for value in values
-            if _normalise_signal_group_id(str(value))
+            _normalise_signal_group_id(value)
+            for value in self._signal_allowed_group_values
+            if _normalise_signal_group_id(value)
         }
+
+    @property
+    def _signal_allowed_group_names(self) -> set[str]:
+        return {
+            _normalise_signal_group_name(value)
+            for value in self._signal_allowed_group_values
+            if _normalise_signal_group_name(value)
+            and not _looks_like_signal_group_id(value)
+        }
+
+    def _signal_resolved_group_names(self) -> dict[str, list[str]]:
+        """Return configured group-name matches found in discovered Signal groups."""
+        allowed_names = self._signal_allowed_group_names
+        matches: dict[str, set[str]] = {name: set() for name in allowed_names}
+        for group in self._signal_groups:
+            group_name = _normalise_signal_group_name(str(group.get("name", "")))
+            if group_name not in allowed_names:
+                continue
+            group_id = _normalise_signal_group_id(str(group.get("id", "")))
+            if group_id:
+                matches[group_name].add(group_id)
+        return {name: sorted(group_ids) for name, group_ids in matches.items()}
+
+    def _signal_resolved_allowed_group_ids(self) -> set[str]:
+        """Return group IDs allowed directly or through a unique configured name."""
+        group_ids = set(self._signal_allowed_group_ids)
+        for matches in self._signal_resolved_group_names().values():
+            if len(matches) == 1:
+                group_ids.add(matches[0])
+        return group_ids
+
+    def _signal_ambiguous_allowed_group_names(self) -> list[str]:
+        return sorted(
+            name
+            for name, matches in self._signal_resolved_group_names().items()
+            if len(matches) > 1
+        )
+
+    def _signal_unresolved_allowed_group_names(self) -> list[str]:
+        known_group_ids = {
+            _normalise_signal_group_id(str(group.get("id", "")))
+            for group in self._signal_groups
+        }
+        matches = self._signal_resolved_group_names()
+        unresolved: list[str] = []
+        for value in self._signal_allowed_group_values:
+            if _looks_like_signal_group_id(value):
+                continue
+            group_id = _normalise_signal_group_id(value)
+            group_name = _normalise_signal_group_name(value)
+            if group_id in known_group_ids or matches.get(group_name):
+                continue
+            unresolved.append(value)
+        return sorted(unresolved, key=str.casefold)
 
     @property
     def _signal_confirmation_mode(self) -> str:
@@ -1191,11 +1285,6 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return self._signal_confirmation_mode in {"ha_and_signal", "signal_only"}
 
     def _signal_client(self) -> SignalRestClient:
-        if not self.signal_rest_integration_detected:
-            raise RuntimeError(
-                "Configure the Home Assistant Signal Messenger integration before "
-                "using Print Bridge Signal intake."
-            )
         if not self._signal_rest_url or not self._signal_account:
             raise RuntimeError(
                 "Signal REST URL and Signal account must be configured first."
@@ -1205,6 +1294,46 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             base_url=self._signal_rest_url,
             account=self._signal_account,
         )
+
+    def _set_signal_rest_status(self, detected: bool, error: str | None = None) -> None:
+        """Store the latest Signal REST detection result."""
+        self._signal_rest_detected = detected
+        self._signal_rest_error = error
+        self._signal_rest_checked_at = datetime.now().isoformat(timespec="seconds")
+
+    def _refresh_signal_entities(self) -> None:
+        """Push Signal-only state changes to coordinator-backed entities."""
+        if self.data is None:
+            return
+        self.async_set_updated_data(
+            replace(
+                self.data,
+                signal_pending_jobs=list(self._signal_pending_jobs),
+                signal_groups=list(self._signal_groups),
+                signal_groups_checked_at=self._signal_groups_checked_at,
+            )
+        )
+
+    async def async_check_signal_rest(self) -> bool:
+        """Probe the configured Signal REST module and update detection state."""
+        if not self.signal_rest_configured:
+            self._set_signal_rest_status(
+                False,
+                "Signal REST URL and Signal account must be configured first.",
+            )
+            self._refresh_signal_entities()
+            return False
+        try:
+            client = self._signal_client()
+            await client.check_health()
+        except Exception as exc:
+            self._set_signal_rest_status(False, _describe_exception(exc))
+            self._refresh_signal_entities()
+            return False
+        await self._async_refresh_signal_groups(client, raise_on_error=False)
+        self._set_signal_rest_status(True, None)
+        self._refresh_signal_entities()
+        return True
 
     @property
     def _schedule_days(self) -> list[str]:
@@ -1308,9 +1437,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
     async def async_sync_signal_receiver(self) -> None:
         """Start or stop the Signal receive loop based on current options."""
-        configured = bool(
-            self._signal_enabled and self._signal_rest_url and self._signal_account
-        )
+        configured = bool(self._signal_enabled_configured and self.signal_rest_configured)
+        if configured and not self.signal_rest_integration_detected:
+            configured = await self.async_check_signal_rest()
+        else:
+            configured = configured and self.signal_rest_integration_detected
         task_running = (
             self._signal_receiver_task is not None
             and not self._signal_receiver_task.done()
@@ -1348,10 +1479,15 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             try:
                 client = self._signal_client()
                 payload = await client.receive()
+                if self._signal_rest_error:
+                    self._set_signal_rest_status(True, None)
+                    self._refresh_signal_entities()
                 await self.async_process_signal_payload(payload, client=client)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self._signal_rest_error = f"Receive failed: {_describe_exception(exc)}"
+                self._refresh_signal_entities()
                 logger.warning("Signal receive failed: %s", exc)
             await asyncio.sleep(_SIGNAL_POLL_INTERVAL_SECONDS)
 
@@ -1380,7 +1516,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     def _signal_message_allowed(self, message: SignalMessage) -> bool:
         """Return True when a Signal message is from a trusted source/group."""
         allowed_senders = self._signal_allowed_senders
-        allowed_groups = self._signal_allowed_group_ids
+        allowed_groups = self._signal_resolved_allowed_group_ids()
+        ambiguous_group_names = set(self._signal_ambiguous_allowed_group_names())
         sender_keys = {
             _normalise_signal_identity(message.sender),
             _normalise_signal_identity(message.sender_uuid or ""),
@@ -1390,6 +1527,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             message.group_id
             and _normalise_signal_group_id(message.group_id) in allowed_groups
         )
+        group_name = _normalise_signal_group_name(message.group_name or "")
+        if (
+            not group_allowed
+            and group_name
+            and group_name in self._signal_allowed_group_names
+            and group_name not in ambiguous_group_names
+        ):
+            group_allowed = True
         return sender_allowed or group_allowed
 
     async def _async_handle_signal_command(
@@ -1920,15 +2065,38 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             raise HomeAssistantError(
                 "Configure Signal REST URL and Signal account before checking groups."
             )
-        if not self.signal_rest_integration_detected:
+        if not await self.async_check_signal_rest():
             raise HomeAssistantError(
-                "Configure the Home Assistant Signal Messenger integration before "
-                "checking Signal groups."
+                f"Signal REST module is not reachable: {self._signal_rest_error}"
             )
-        groups = await self._signal_client().list_groups()
+        groups = await self._async_refresh_signal_groups(
+            self._signal_client(),
+            raise_on_error=True,
+        )
+        await self.async_request_refresh()
+        return groups
+
+    async def _async_refresh_signal_groups(
+        self,
+        client: SignalRestClient,
+        *,
+        raise_on_error: bool,
+    ) -> list[dict[str, Any]]:
+        """Refresh discovered Signal groups for ID and name allow-list matching."""
+        try:
+            groups = await client.list_groups()
+        except Exception as exc:
+            self._signal_group_resolution_error = _describe_exception(exc)
+            if raise_on_error:
+                from homeassistant.exceptions import HomeAssistantError
+
+                raise HomeAssistantError(
+                    f"Signal group check failed: {self._signal_group_resolution_error}"
+                ) from exc
+            return []
         self._signal_groups = groups
         self._signal_groups_checked_at = datetime.now().isoformat(timespec="seconds")
-        await self.async_request_refresh()
+        self._signal_group_resolution_error = None
         return groups
 
     async def _async_send_signal_job_status(

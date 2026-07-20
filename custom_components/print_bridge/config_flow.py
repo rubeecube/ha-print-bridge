@@ -92,8 +92,6 @@ from .const import (
     EMAIL_ACTIONS,
     SCHEDULE_DAYS,
     SIGNAL_CONFIRMATION_MODES,
-    SIGNAL_REST_COMPONENTS,
-    SIGNAL_REST_INTEGRATION_DOMAIN,
 )
 from .print_profiles import (
     normalize_print_type,
@@ -186,14 +184,6 @@ def _split_option_lines(value: Any, *, lower: bool = False) -> list[str]:
         if item and item not in items:
             items.append(item)
     return items
-
-
-def _signal_rest_integration_detected(hass: HomeAssistant) -> bool:
-    """Return True when HA has Signal Messenger/REST configured."""
-    return bool(
-        hass.config_entries.async_entries(SIGNAL_REST_INTEGRATION_DOMAIN)
-        or any(component in hass.config.components for component in SIGNAL_REST_COMPONENTS)
-    )
 
 
 # Sentinel option values used in select fields
@@ -613,7 +603,6 @@ class AutoPrintOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         options = self._config_entry.options
         imap_entries = list(self.hass.config_entries.async_entries("imap"))
-        signal_rest_detected = _signal_rest_integration_detected(self.hass)
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -679,15 +668,13 @@ class AutoPrintOptionsFlow(OptionsFlow):
                     errors[CONF_SCHEDULE_TEMPLATE] = "invalid_template"
 
             if not errors:
-                signal_enabled = (
-                    bool(user_input.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED))
-                    and signal_rest_detected
-                )
                 return self.async_create_entry(
                     title="",
                     data={
                         **user_input,
-                        CONF_SIGNAL_ENABLED: signal_enabled,
+                        CONF_SIGNAL_ENABLED: bool(
+                            user_input.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED)
+                        ),
                         CONF_BOOKLET_PATTERNS: patterns,
                         CONF_ALLOWED_SENDERS: senders,
                         CONF_FOLDER_FILTER: folders,
@@ -798,10 +785,7 @@ class AutoPrintOptionsFlow(OptionsFlow):
             ): str,
             vol.Required(
                 CONF_SIGNAL_ENABLED,
-                default=(
-                    options.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED)
-                    and signal_rest_detected
-                ),
+                default=options.get(CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED),
             ): bool,
             vol.Optional(
                 CONF_SIGNAL_MODULE_ID,
