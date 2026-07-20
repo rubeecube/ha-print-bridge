@@ -7,8 +7,8 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-218%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.31-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-221%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.32-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
@@ -239,9 +239,8 @@ Use CUPS when: the printer is USB-attached, needs driver/raster conversion, or y
 ### 3. Signal REST Module — optional for Signal printing
 
 Signal printing is disabled by default and is confirmation-only. It stays
-disabled until Home Assistant detects the **Signal Messenger** integration.
-After that, configure the signal-cli-rest-api compatible receiver module in
-Print Bridge options:
+disabled until the configured signal-cli-rest-api compatible receiver answers
+successfully for the Signal REST URL and account in Print Bridge options:
 
 | Field | Description |
 |---|---|
@@ -249,13 +248,14 @@ Print Bridge options:
 | Signal REST URL | Base URL of the Signal REST module, for example `http://homeassistant.local:8080`. |
 | Signal Account / Number | Registered Signal account used by the module. |
 | Signal Allowed Senders | Trusted Signal phone numbers or UUIDs, one per line. |
-| Signal Allowed Group IDs | Trusted Signal group IDs, one per line. Use **Check Signal Groups** to discover exact IDs. |
+| Signal Allowed Groups | Trusted Signal group IDs or exact group names, one per line. Print Bridge resolves names through **Check Signal Groups**; duplicate names are not trusted. |
 | Signal Confirmation Mode | `Home Assistant and Signal` by default. Pending jobs can be confirmed from HA or by replying `print <token>` in Signal. |
 | Default Print Type | Named profile used for new pending Signal jobs. |
 | Custom Print Types | Optional profile lines, such as `weekly=booklet=true copies=2 media=a4`. |
 
-For group printing, use exact group IDs, not display names. Names can change or
-duplicate; group IDs are the stable filter.
+For group printing, exact IDs are still the safest filter. Group names are
+accepted for convenience; Print Bridge resolves them through the Signal REST
+group list and ignores duplicate names instead of guessing.
 
 #### Common to both modes
 
@@ -280,12 +280,12 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 | **Raster DPI** | `150` | Used only when direct IPP printing must convert PDFs to PWG Raster/JPEG. Lower values are faster and create smaller jobs. |
 | **Default Print Type** | Normal | Named profile used for pending Signal jobs before confirmation. Built-ins: `normal`, `simplex`, `duplex`, `booklet`, `draft`. |
 | **Custom Print Types** | *(empty)* | Optional profile lines. Example: `weekly=booklet=true copies=2 media=a4`. |
-| **Enable Signal intake** | Off | Receive Signal document attachments from the configured module. This remains unavailable/off until Home Assistant detects the Signal Messenger integration. Nothing prints automatically; each received document waits for confirmation. |
+| **Enable Signal intake** | Off | Receive Signal document attachments from the configured module. Runtime intake remains off until the configured Signal REST URL/account answer successfully. Nothing prints automatically; each received document waits for confirmation. |
 | **Signal Module ID** | `019ef0ac-4dcf-72b2-b5ec-3ff077450a00` | Identifier of the Signal module used by this integration. |
 | **Signal REST URL** | *(empty)* | Base URL for the signal-cli-rest-api compatible module. |
 | **Signal Account / Number** | *(empty)* | Signal account registered in the module. |
 | **Signal Allowed Senders** | *(empty = none)* | Trusted Signal phone numbers or UUIDs. Unlike email, empty means no Signal sender is trusted. |
-| **Signal Allowed Group IDs** | *(empty = none)* | Trusted Signal group IDs. Empty means no Signal group is trusted. |
+| **Signal Allowed Groups** | *(empty = none)* | Trusted Signal group IDs or exact group names. Empty means no Signal group is trusted. Duplicate names are ignored until you use an exact group ID. |
 | **Signal Confirmation Mode** | Home Assistant and Signal | Confirm pending jobs from HA, Signal replies, or both. |
 | **Signal Confirmation TTL** | `24` | Pending Signal job expiration in hours. |
 | **Email Action after Printing** | Do nothing | What to do with the email after the PDF prints: **Do nothing** / **Mark as read** / **Move to archive folder** / **Delete from server**. |

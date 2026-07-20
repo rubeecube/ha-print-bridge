@@ -388,8 +388,28 @@ class SignalPendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEnt
             "signal_enabled_configured": opts.get(
                 CONF_SIGNAL_ENABLED, DEFAULT_SIGNAL_ENABLED
             ),
+            "signal_rest_detected": (
+                self.coordinator.signal_rest_integration_detected
+            ),
             "signal_rest_integration_detected": (
                 self.coordinator.signal_rest_integration_detected
+            ),
+            "signal_messenger_integration_detected": (
+                self.coordinator.signal_messenger_integration_detected
+            ),
+            "signal_rest_checked_at": self.coordinator.signal_rest_checked_at,
+            "signal_rest_error": self.coordinator.signal_rest_error,
+            "signal_group_resolution_error": (
+                self.coordinator._signal_group_resolution_error
+            ),
+            "signal_allowed_group_ids_resolved": sorted(
+                self.coordinator._signal_resolved_allowed_group_ids()
+            ),
+            "signal_allowed_group_names_ambiguous": (
+                self.coordinator._signal_ambiguous_allowed_group_names()
+            ),
+            "signal_allowed_group_names_unresolved": (
+                self.coordinator._signal_unresolved_allowed_group_names()
             ),
             "signal_module_id": opts.get(
                 CONF_SIGNAL_MODULE_ID, DEFAULT_SIGNAL_MODULE_ID

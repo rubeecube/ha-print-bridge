@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.32] — 2026-07-20
+
+### Changed
+
+- **Signal REST detection** — Signal intake now probes the configured Signal REST URL/account directly instead of requiring Home Assistant's legacy Signal Messenger marker.
+- **Signal group names** — Signal allowed groups now accept exact group names as well as group IDs; names are resolved through the Signal REST group list and duplicate names are rejected.
+- **Signal diagnostics** — pending-job sensor attributes now expose REST probe status, group resolution errors, resolved group IDs, unresolved names, and ambiguous names.
+- Bumped package metadata to `0.1.32`.
+
+---
+
 ## [0.1.31] — 2026-07-19
 
 ### Added
@@ -351,6 +362,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.32]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.32
 [0.1.31]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.31
 [0.1.30]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.30
 [0.1.24]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.24

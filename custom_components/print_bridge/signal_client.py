@@ -104,6 +104,33 @@ class SignalRestClient:
                 raise RuntimeError(f"Signal websocket failed: {ws.exception()}")
             return []
 
+    async def check_health(self) -> None:
+        """Raise if the Signal REST service/account cannot be reached."""
+        errors: list[str] = []
+        for path in ("/v1/health", "/v1/about"):
+            url = f"{self._base_url}{path}"
+            try:
+                async with self._session.get(
+                    url,
+                    headers={"Accept": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status < 400:
+                        return
+                    errors.append(f"{path}: HTTP {resp.status}")
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                errors.append(f"{path}: {exc}")
+
+        # Older deployments may not expose health/about. Listing groups is
+        # non-consuming and also verifies that the configured account is usable.
+        try:
+            await self.list_groups()
+            return
+        except Exception as exc:
+            errors.append(f"/v1/groups/<account>: {exc}")
+
+        raise RuntimeError("; ".join(errors) or "Signal REST module is unreachable")
+
     async def list_groups(self) -> list[dict[str, Any]]:
         """Return groups known to the Signal account."""
         url = f"{self._base_url}/v1/groups/{quote(self._account, safe='')}"
