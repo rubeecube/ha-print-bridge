@@ -2,6 +2,7 @@ blueprint:
   name: "Print Bridge — Email to Printer"
   description: >
     Print common email attachments directly from your mailbox.
+    Optionally download and print linked documents from the email body.
 
     Triggers on every new email from the selected IMAP account.
     Optionally filters by sender, subject, or attachment name.
@@ -92,6 +93,35 @@ blueprint:
       selector:
         text:
 
+    print_linked_documents:
+      name: Print linked documents
+      description: >
+        Download and print document links from the plain-text or HTML body.
+        Disabled by default. Configure allowed domains and a URL filter below.
+        The coordinator validates links and blocks private addresses.
+      default: false
+      selector:
+        boolean:
+
+    allowed_link_domains:
+      name: Allowed link domains (required for linked documents)
+      description: >
+        Exact hostnames allowed for document downloads and redirects.
+        Required when linked-document printing is enabled.
+        Example: `storage.googleapis.com`
+      default: ""
+      selector:
+        text:
+
+    link_url_filter:
+      name: Link URL contains (optional)
+      description: >
+        Only download document links whose URL contains this substring.
+        Example: `/sm-dashboard/events-assets/`
+      default: ""
+      selector:
+        text:
+
     # ── Print settings ────────────────────────────────────────────────────
 
     booklet:
@@ -145,6 +175,9 @@ variables:
   attachment_ignore_filter: !input attachment_ignore_filter
   allowed_extensions: !input allowed_extensions
   ignored_extensions: !input ignored_extensions
+  print_linked_documents: !input print_linked_documents
+  allowed_link_domains: !input allowed_link_domains
+  link_url_filter: !input link_url_filter
   booklet: !input booklet
   duplex: !input duplex
   mark_as_seen: !input mark_as_seen
@@ -152,8 +185,21 @@ variables:
   _sender: "{{ trigger.event.data.sender | lower }}"
   _subject: "{{ trigger.event.data.subject | lower }}"
   _mail_text: "{{ trigger.event.data.text | default('') | lower }}"
+  _mail_html: "{{ trigger.event.data.html | default('') | lower }}"
   _uid: "{{ trigger.event.data.uid | string }}"
-  _parts: "{{ trigger.event.data.parts }}"
+  _parts: "{{ trigger.event.data.parts | default({}) }}"
+
+  _linked_documents_possible: >
+    {% set body = namespace(html=false) %}
+    {% for part in _parts.values() %}
+      {% if (part.get('content_type', '') | lower).split(';')[0] | trim == 'text/html' %}
+        {% set body.html = true %}
+      {% endif %}
+    {% endfor %}
+    {{ print_linked_documents
+       and ('https://' in _mail_text or 'http://' in _mail_text
+            or 'https://' in _mail_html or 'http://' in _mail_html
+            or body.html) }}
 
   _effective_duplex: "{{ 'two-sided-short-edge' if booklet else duplex }}"
   _mail_config_allowed: >
@@ -187,7 +233,7 @@ condition:
       {{ subject_filter | trim == ''
          or subject_filter | lower | trim in _subject }}
 
-  - alias: "Email has at least one printable attachment"
+  - alias: "Email has a printable attachment, possible document link, or config request"
     condition: template
     value_template: >
       {% set printable_mimes = [
@@ -261,12 +307,12 @@ condition:
           {% endif %}
         {% endif %}
       {% endfor %}
-      {{ ns.has_printable or _mail_config_requested }}
+      {{ ns.has_printable or _linked_documents_possible or _mail_config_requested }}
 
 # ── Actions ─────────────────────────────────────────────────────────────────
 
 action:
-  - alias: "Print matching printable attachments as one job"
+  - alias: "Print matching attachments and opted-in linked documents as one job"
     action: print_bridge.process_imap_message
     data:
       entry_id: "{{ trigger.event.data.entry_id }}"
@@ -278,9 +324,13 @@ action:
       attachment_ignore_filter: "{{ attachment_ignore_filter }}"
       allowed_extensions: "{{ allowed_extensions }}"
       ignored_extensions: "{{ ignored_extensions }}"
+      print_linked_documents: "{{ print_linked_documents }}"
+      allowed_link_domains: "{{ allowed_link_domains }}"
+      link_url_filter: "{{ link_url_filter }}"
       sender: "{{ trigger.event.data.sender }}"
       mail_subject: "{{ trigger.event.data.subject }}"
       mail_text: "{{ trigger.event.data.text | default('') }}"
+      mail_html: "{{ trigger.event.data.html | default('') }}"
       mail_config_allowed: "{{ _mail_config_allowed }}"
     response_variable: print_bridge_result
 

@@ -7,7 +7,7 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-221%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-244%20passing-brightgreen.svg)](tests/)
 [![Version](https://img.shields.io/badge/version-0.1.32-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
@@ -454,11 +454,34 @@ them in email attachment order, and submit one print job. This is the default
 path used by the bundled blueprint because it is faster when one email has
 multiple attachments.
 
+Linked documents are opt-in: set `print_linked_documents: true` to extract
+document URLs from the plain-text and HTML email bodies. Use the domain allowlist
+and URL substring filter to limit downloads, for example:
+
+```yaml
+print_linked_documents: true
+allowed_link_domains: "storage.googleapis.com"
+link_url_filter: "/sm-dashboard/events-assets/"
+```
+
+An explicit allowed domain is required when enabled. Downloads are limited to
+10 links per email and 20 MiB per document. Redirects must stay on allowed public
+hosts. Links returning webpages are skipped; webpage rendering is not supported.
+The coordinator performs URL extraction and validation; private addresses are
+blocked. Accepted PDFs and common documents are downloaded and processed through
+the existing conversion, merge, and print pipeline. An email does not need an
+attachment when linked-document printing is enabled and its body may contain a
+URL. Leave the option disabled to preserve attachment-only printing.
+
 | Field | Required | Description |
 |---|---|---|
 | `entry_id` | yes | IMAP config entry ID (`trigger.event.data.entry_id`) |
 | `uid` | yes | Email UID (`trigger.event.data.uid`) |
 | `parts` | no | Parts dictionary from `trigger.event.data.parts`; avoids one metadata fetch |
+| `print_linked_documents` | no | Boolean, default `false`; opt in to downloading and printing linked documents |
+| `allowed_link_domains` | no | Domain allowlist string, default `''`; for example `storage.googleapis.com` |
+| `link_url_filter` | no | URL substring filter string, default `''`; for example `/sm-dashboard/events-assets/` |
+| `mail_html` | no | Original HTML email body string, default `''`; used for document link extraction |
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
 | `attachment_filter` | no | Only include attachment filenames containing this text |
@@ -692,6 +715,9 @@ https://github.com/rubeecube/ha-print-bridge/blob/main/blueprints/automation/pri
 | Ignore attachment names containing | — | Skip filenames containing any configured substring |
 | Only print extensions | *(all printable)* | Optional allow-list such as `pdf docx jpg` |
 | Ignore extensions | — | Optional deny-list such as `png tiff` |
+| Print linked documents | Off | Opt in to downloading and printing document links from the text or HTML body |
+| Allowed link domains | `''` | Domain allowlist, for example `storage.googleapis.com` |
+| Link URL contains | `''` | URL substring filter, for example `/sm-dashboard/events-assets/` |
 | Booklet printing | Off | Reorder pages and force short-edge duplex |
 | Duplex | Two-sided portrait | Fallback duplex mode |
 | Mark as Seen | On | Set `\Seen` flag on the email after processing |
@@ -706,10 +732,12 @@ imap_content event received
         ├─ sender in allowed_senders? (empty = yes) ── no ──► skip
         │
         ├─ subject contains filter? (empty = yes) ───── no ──► skip
-        ├─ filename / extension rules match? ───────── no ──► skip
-        ├─ any printable attachment left? ───────────── no ──► skip
+        ├─ printable attachment, opted-in possible URL,
+        │  or allowed config request? ──────────────── no ──► skip
         │
-        └─ convert matching attachments to PDF
+        └─ coordinator validates/extracts opted-in links
+                 download allowed documents (private addresses blocked)
+                 filter and convert matching documents to PDF
                  apply mail parameters / blueprint settings
                  merge attachments into one job
                  apply booklet imposition after merge

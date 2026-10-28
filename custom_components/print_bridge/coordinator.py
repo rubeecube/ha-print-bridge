@@ -122,6 +122,12 @@ from .const import (
 from .imap_checker import EmailPreview, preview_mailbox
 from .mail_params import MailPrintParameters, parse_mail_print_parameters
 from .page_order import reverse_pdf_pages
+from .linked_documents import (
+    MAX_LINKS,
+    download_linked_document,
+    extract_document_links,
+    validate_document_url,
+)
 from .print_profiles import (
     PrintProfile,
     merge_print_parameters,
@@ -3103,6 +3109,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         mail_config_allowed: bool | None = None,
         mail_subject: str | None = None,
         mail_text: str | None = None,
+        print_linked_documents: bool = False,
+        allowed_link_domains: str = "",
+        link_url_filter: str = "",
+        mail_html: str | None = None,
     ) -> PrintJobResult:
         """Fetch, convert, merge, and print all printable attachments from an email."""
         if parts is not None and not isinstance(parts, dict):
@@ -3136,6 +3146,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             sender = sender or _normalise_email_address(str(fetched.get("sender", "")))
             mail_subject = mail_subject if mail_subject is not None else str(fetched.get("subject", ""))
             mail_text = mail_text if mail_text is not None else str(fetched.get("text", ""))
+            mail_html = mail_html or str(fetched.get("html", "") or "")
 
         mail_params = self._mail_params_for_sender(
             mail_subject or "",
@@ -3227,6 +3238,15 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             effective_allowed_extensions,
             effective_ignored_extensions,
         )
+        if print_linked_documents:
+            linked = await self._async_convert_linked_documents(
+                entry_id, uid, parts or {}, mail_text or "", mail_html or "",
+                allowed_link_domains, link_url_filter,
+                effective_attachment_filter, effective_attachment_ignore_filter,
+                effective_allowed_extensions, effective_ignored_extensions,
+            )
+            summary.converted.extend(linked.converted)
+            summary.skipped.extend(linked.skipped)
         job_filename = self._message_job_filename(mail_subject or "", uid, summary)
 
         if not summary.converted:
@@ -3356,6 +3376,79 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         await self._async_notify_job(result)
         await self.async_request_refresh()
         return result
+
+    async def _async_convert_linked_documents(
+        self,
+        entry_id: str,
+        uid: str,
+        parts: dict[str, dict[str, Any]],
+        text: str,
+        html: str,
+        allowed_domains: str,
+        url_filter: str,
+        attachment_filter: str | None,
+        attachment_ignore_filter: Any,
+        allowed_extensions: Any,
+        ignored_extensions: Any,
+    ) -> AttachmentConversionSummary:
+        """Download opted-in email links and reuse attachment conversion/filtering."""
+        summary = AttachmentConversionSummary()
+        if not allowed_domains.strip():
+            summary.skipped.append("Linked documents: configure allowed_link_domains first")
+            return summary
+        # IMAP events can contain truncated text and omit HTML entirely. Fetch
+        # the body part so hidden anchor destinations are still discoverable.
+        if not html:
+            for key, info in parts.items():
+                if _part_filename(info) or str(info.get("content_type", "")).split(";", 1)[0].lower() != "text/html":
+                    continue
+                try:
+                    response = await self.hass.services.async_call(
+                        "imap", "fetch_part", {"entry": entry_id, "uid": uid, "part": str(key)},
+                        blocking=True, return_response=True,
+                    )
+                    html = _decode_part_payload(response).decode("utf-8", errors="replace")
+                except Exception as exc:
+                    summary.skipped.append(f"Email HTML: {_describe_exception(exc)}")
+                break
+        links = await self.hass.async_add_executor_job(extract_document_links, text, html)
+        selected: list[str] = []
+        for url in links:
+            if url_filter and url_filter not in url:
+                continue
+            try:
+                validate_document_url(url, allowed_domains)
+            except ValueError:
+                continue
+            selected.append(url)
+        if len(selected) > MAX_LINKS:
+            summary.skipped.append(f"Linked documents: only the first {MAX_LINKS} matching links are processed")
+        for index, url in enumerate(selected[:MAX_LINKS], 1):
+            filename = f"linked-document-{index}"
+            try:
+                filename, raw_bytes, content_type = await download_linked_document(url, allowed_domains)
+                # A landing page is not the linked document. Do not print HTML
+                # login pages or error text returned by a download endpoint.
+                if content_type in {"text/html", "application/xhtml+xml"}:
+                    raise ValueError("Link returned a webpage instead of a downloadable document")
+                resolved = printable_type(filename, content_type)
+                if resolved is None or not resolved.supported:
+                    raise ValueError("Link returned an unsupported document type")
+                skip = _filter_skip_reason(
+                    filename, content_type, attachment_filter=attachment_filter,
+                    attachment_ignore_filter=attachment_ignore_filter,
+                    allowed_extensions=allowed_extensions, ignored_extensions=ignored_extensions,
+                )
+                if skip:
+                    summary.skipped.append(f"{filename}: {skip}")
+                    continue
+                converted = await self.hass.async_add_executor_job(
+                    convert_document_to_pdf, raw_bytes, filename, content_type,
+                )
+                summary.converted.append(converted)
+            except Exception as exc:
+                summary.skipped.append(f"{filename}: {_describe_exception(exc)}")
+        return summary
 
     async def _async_convert_message_attachments(
         self,
