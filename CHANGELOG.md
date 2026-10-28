@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.1.33] — 2026-10-28
 
 ### Added
 
@@ -371,6 +371,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.33]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.33
 [0.1.32]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.32
 [0.1.31]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.31
 [0.1.30]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.30
