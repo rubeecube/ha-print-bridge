@@ -511,6 +511,27 @@ process_imap_message:
     merge them in attachment order, and submit one print job. Unsupported or
     failed attachments are skipped and reported in status replies and audit logs.
   fields:
+    print_linked_documents:
+      name: Print Linked Documents
+      description: Download printable documents linked in the email body. Requires allowed link domains.
+      default: false
+      selector:
+        boolean:
+    allowed_link_domains:
+      name: Allowed Link Domains
+      description: Exact hostnames separated by commas or spaces. Every redirect must also use an allowed public host.
+      selector:
+        text:
+    link_url_filter:
+      name: Link URL Contains
+      description: Optional case-sensitive substring to select document links.
+      selector:
+        text:
+    mail_html:
+      name: Mail HTML
+      description: Optional email HTML for link extraction. If missing, the HTML body part is fetched through IMAP.
+      selector:
+        text:
     entry_id:
       name: IMAP Entry ID
       description: >-

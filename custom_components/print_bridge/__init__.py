@@ -93,6 +93,10 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
 
 _PROCESS_IMAP_MESSAGE_SCHEMA = vol.Schema(
     {
+        vol.Optional("print_linked_documents", default=False): cv.boolean,
+        vol.Optional("allowed_link_domains", default=""): cv.string,
+        vol.Optional("link_url_filter", default=""): cv.string,
+        vol.Optional("mail_html"): cv.string,
         vol.Required("entry_id"): cv.string,
         vol.Required("uid"): cv.string,
         vol.Optional("parts"): vol.Any(dict, cv.string),
@@ -388,6 +392,10 @@ def _register_services(hass: HomeAssistant) -> None:
         result = await coordinator.async_process_imap_message(
             entry_id=call.data["entry_id"],
             uid=call.data["uid"],
+            print_linked_documents=call.data.get("print_linked_documents", False),
+            allowed_link_domains=call.data.get("allowed_link_domains", ""),
+            link_url_filter=call.data.get("link_url_filter", ""),
+            mail_html=call.data.get("mail_html"),
             parts=call.data.get("parts"),
             duplex_override=call.data.get("duplex"),
             booklet_override=call.data.get("booklet", False) or None,

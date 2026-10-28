@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- Optional email document-link downloads in `process_imap_message` and the email blueprint, including HTML body links, domain and URL filters, and the existing conversion and print settings.
+- Public-address validation for download connections and redirects, with limits of 10 links per email and 20 MiB per document. Failed downloads are reported with skipped attachments.
+
+---
+
 ## [0.1.32] — 2026-07-20
 
 ### Changed
