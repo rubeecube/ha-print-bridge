@@ -14,6 +14,8 @@ from print_handler import (
     build_get_printer_attributes_packet,
     build_ipp_packet,
     determine_sides,
+    http_url_to_ipp_uri,
+    ipp_response_is_valid,
     ipp_response_succeeded,
     is_booklet_job,
     parse_ipp_attributes,
@@ -290,3 +292,19 @@ def test_determine_sides(duplex_mode, booklet, expected_sides):
 )
 def test_is_booklet_job(filename, patterns, expected):
     assert is_booklet_job(filename, patterns) is expected
+
+
+# ── IPP reachability probe ────────────────────────────────────────────────────
+
+
+def test_ipp_response_is_valid_accepts_success_and_error_status():
+    success = struct.pack(">HHI", 0x0200, 0x0000, 1) + b"\x03"
+    busy = struct.pack(">HHI", 0x0101, 0x0507, 1) + b"\x03"
+
+    assert ipp_response_is_valid(success) is True
+    assert ipp_response_is_valid(busy) is True
+
+
+def test_ipp_response_is_valid_rejects_non_ipp():
+    assert ipp_response_is_valid(b"") is False
+    assert ipp_response_is_valid(b"<!DOCTYPE HTML><html></html>") is False

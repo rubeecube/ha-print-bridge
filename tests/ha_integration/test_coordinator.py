@@ -2485,3 +2485,57 @@ async def test_imap_event_posts_pdf_to_fake_ipp_printer(
         assert received["body"].endswith(b"%%EOF\n")
     finally:
         await runner.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Printer reachability: Direct IPP uses the shared probe; CUPS stays HEAD
+# ---------------------------------------------------------------------------
+
+
+async def test_direct_ipp_online_check_uses_ipp_probe(hass: HomeAssistant) -> None:
+    """Direct IPP online checks go through the shared Get-Printer-Attributes probe."""
+    _, coordinator = await _setup_coordinator(
+        hass,
+        data={CONF_DIRECT_PRINTER_URL: "http://printer.local:631/ipp/print"},
+    )
+    session = MagicMock()
+    with (
+        patch(
+            "custom_components.print_bridge.coordinator.async_get_clientsession",
+            return_value=session,
+        ) as get_session,
+        patch(
+            "custom_components.print_bridge.coordinator.async_probe_ipp_endpoint",
+            new=AsyncMock(return_value=True),
+        ) as probe,
+    ):
+        assert await coordinator._async_check_printer_online() is True
+
+    get_session.assert_called_once_with(coordinator.hass, verify_ssl=False)
+    probe.assert_awaited_once_with(
+        session, "http://printer.local:631/ipp/print", timeout=5
+    )
+    session.head.assert_not_called()
+
+
+async def test_cups_online_check_still_uses_http_head(hass: HomeAssistant) -> None:
+    """CUPS reachability is unchanged: HTTP HEAD of the server URL."""
+    _, coordinator = await _setup_coordinator(hass)
+    resp = MagicMock()
+    resp.status = 200
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=False)
+    session = MagicMock()
+    session.head.return_value = resp
+
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=session,
+    ) as get_session:
+        assert await coordinator._async_check_printer_online() is True
+
+    get_session.assert_called_once_with(coordinator.hass)
+    session.head.assert_called_once()
+    assert session.head.call_args.args[0] == "http://cups.local:631"
+    assert session.head.call_args.kwargs["timeout"].total == 5
+    session.post.assert_not_called()

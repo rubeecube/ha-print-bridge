@@ -67,17 +67,33 @@ def mock_coordinator_update():
 
 # ── CUPS HEAD check mock ───────────────────────────────────────────────────────
 
+def _ipp_ok_body() -> bytes:
+    """Minimal IPP 2.0 successful-ok packet (status 0x0000)."""
+    import struct
+
+    return struct.pack(">HHI", 0x0200, 0x0000, 1) + b"\x03"
+
+
 def _make_cups_session(status: int = 200) -> MagicMock:
-    """Mock aiohttp session where both HEAD and GET return *status*."""
+    """Mock aiohttp session where HEAD, GET, and IPP POST return *status*.
+
+    Direct IPP setup probes with Get-Printer-Attributes (POST,
+    Content-Type: application/ipp) rather than HTTP HEAD.  The mock
+    POST body is a valid IPP successful-ok packet so that probe succeeds.
+    CUPS discovery still uses GET /printers/ and CUPS validation still
+    uses HEAD.
+    """
     resp = MagicMock()
     resp.status = status
     resp.__aenter__ = AsyncMock(return_value=resp)
     resp.__aexit__ = AsyncMock(return_value=False)
     # GET /printers/ returns empty HTML (no printer names to parse)
     resp.text = AsyncMock(return_value="<html></html>")
+    resp.read = AsyncMock(return_value=_ipp_ok_body())
     session = MagicMock()
     session.head.return_value = resp
     session.get.return_value = resp
+    session.post.return_value = resp
     return session
 
 

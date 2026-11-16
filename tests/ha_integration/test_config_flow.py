@@ -12,7 +12,7 @@ Golden rules applied:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.config_entries import SOURCE_USER
@@ -634,3 +634,74 @@ async def test_direct_ipp_flow_creates_entry(
     assert "printer_name" not in result["data"]
     assert "cups_url" not in result["data"]
     assert result["title"] == "Print Bridge — Direct Printer"
+
+
+async def test_direct_ipp_flow_succeeds_when_head_is_closed(
+    hass: HomeAssistant,
+    mock_setup_entry,
+) -> None:
+    """Printers that close HTTP HEAD still set up if IPP POST is valid."""
+    import aiohttp
+
+    from tests.ha_integration.conftest import _ipp_ok_body
+
+    direct_url = "http://direct-printer.local/ipp/print"
+    session = MagicMock()
+    session.head.side_effect = aiohttp.ServerDisconnectedError()
+    resp = MagicMock()
+    resp.status = 200
+    resp.read = AsyncMock(return_value=_ipp_ok_body())
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=False)
+    session.post.return_value = resp
+
+    with _mock_no_discovery():
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+
+    with patch(
+        "custom_components.print_bridge.config_flow.async_get_clientsession",
+        return_value=session,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"direct_printer_url": direct_url},
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["direct_printer_url"] == direct_url
+    session.head.assert_not_called()
+    session.post.assert_called()
+    assert session.post.call_args.kwargs["headers"] == {
+        "Content-Type": "application/ipp"
+    }
+
+
+async def test_direct_ipp_flow_cannot_connect_when_ipp_probe_fails(
+    hass: HomeAssistant,
+    mock_setup_entry,
+) -> None:
+    """A real connection failure on the IPP probe still reports cannot_connect."""
+    import aiohttp
+
+    direct_url = "http://direct-printer.local/ipp/print"
+    session = MagicMock()
+    session.post.side_effect = aiohttp.ClientError("refused")
+
+    with _mock_no_discovery():
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+
+    with patch(
+        "custom_components.print_bridge.config_flow.async_get_clientsession",
+        return_value=session,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"direct_printer_url": direct_url},
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["direct_printer_url"] == "cannot_connect_cups"

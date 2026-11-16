@@ -1,7 +1,7 @@
 """IPP 2.0 packet construction for the Print Bridge integration.
 
 All functions are pure (no I/O, no HA dependencies).  Network I/O is handled
-by the coordinator using aiohttp.
+by ipp_client using aiohttp.
 
 Two printing modes are supported:
 
@@ -375,6 +375,16 @@ def ipp_response_succeeded(response: bytes) -> tuple[bool, str]:
     if status_code is None:
         return False, description
     return status_code < 0x0100, description
+
+
+def ipp_response_is_valid(response: bytes) -> bool:
+    """Return True if *response* is a parseable IPP 1.x/2.x packet.
+
+    Any status is accepted, including IPP client/server errors.  Status
+    ``0x0000`` (successful-ok) is the usual success case.
+    """
+    status_code, _ = parse_ipp_response_status(response)
+    return status_code is not None
 
 
 def determine_sides(duplex_mode: str, is_booklet: bool) -> str:

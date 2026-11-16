@@ -128,6 +128,7 @@ from .linked_documents import (
     extract_document_links,
     validate_document_url,
 )
+from .ipp_client import async_post_ipp, async_probe_ipp_endpoint
 from .print_profiles import (
     PrintProfile,
     merge_print_parameters,
@@ -3998,19 +3999,18 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         session = async_get_clientsession(self.hass)
 
         try:
-            async with session.post(
+            http_status, body = await async_post_ipp(
+                session,
                 self._ipp_endpoint,
-                data=packet,
-                headers={"Content-Type": "application/ipp"},
+                packet,
                 timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                body = await resp.read()
-                if resp.status != 200:
-                    raise RuntimeError(f"HTTP {resp.status}")
-                ipp_ok, ipp_status = ipp_response_succeeded(body)
-                if not ipp_ok:
-                    raise RuntimeError(ipp_status)
-                attrs = parse_ipp_attributes(body)
+            )
+            if http_status != 200:
+                raise RuntimeError(f"HTTP {http_status}")
+            ipp_ok, ipp_status = ipp_response_succeeded(body)
+            if not ipp_ok:
+                raise RuntimeError(ipp_status)
+            attrs = parse_ipp_attributes(body)
         except Exception as exc:
             capabilities = PrinterCapabilities(
                 checked_at=checked_at,
@@ -4197,109 +4197,19 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
         session = async_get_clientsession(self.hass)
         try:
-            async with session.post(
+            http_status, body = await async_post_ipp(
+                session,
                 self._ipp_endpoint,
-                data=packet,
-                headers={"Content-Type": "application/ipp"},
+                packet,
                 timeout=aiohttp.ClientTimeout(
                     total=_PRINT_JOB_TIMEOUT_SECONDS,
                     sock_connect=30,
                 ),
-            ) as resp:
-                body = await resp.read()
-                body_prefix = body[:256].lstrip().lower()
-                if resp.status != 200:
-                    error = f"HTTP {resp.status}"
-                    logger.error("CUPS rejected job for '%s': %s", filename, error)
-                    return PrintJobResult(
-                        filename=filename, success=False, error=error,
-                        duplex=duplex_mode, booklet=booklet,
-                        copies=effective_copies, collate=effective_collate,
-                        orientation=effective_orientation,
-                        media=effective_media, raster_dpi=reported_raster_dpi,
-                        reverse_order=effective_reverse_order,
-                        reverse_order_applied=reverse_order_applied,
-                        sides=sides, document_format=document_format,
-                        status_code=error, status=error,
-                    )
-
-                if body_prefix.startswith(b"<!doctype html") or body_prefix.startswith(b"<html"):
-                    error = "HTTP 200 with HTML response"
-                    logger.error("CUPS rejected job for '%s': %s", filename, error)
-                    return PrintJobResult(
-                        filename=filename, success=False, error=error,
-                        duplex=duplex_mode, booklet=booklet,
-                        copies=effective_copies, collate=effective_collate,
-                        orientation=effective_orientation,
-                        media=effective_media, raster_dpi=reported_raster_dpi,
-                        reverse_order=effective_reverse_order,
-                        reverse_order_applied=reverse_order_applied,
-                        sides=sides, document_format=document_format,
-                        status_code="HTTP 200", status=error,
-                    )
-
-                status_code, ipp_status = parse_ipp_response_status(body)
-                ipp_ok = status_code is not None and status_code < 0x0100
-                ipp_status_code = (
-                    f"IPP 0x{status_code:04x}" if status_code is not None else None
-                )
-                if ipp_ok:
-                    logger.debug(
-                        "Print job accepted for '%s' (format=%s, sides=%s, %s)",
-                        filename, document_format, sides, ipp_status,
-                    )
-                    return PrintJobResult(
-                        filename=filename, success=True,
-                        duplex=duplex_mode, booklet=booklet,
-                        copies=effective_copies, collate=effective_collate,
-                        orientation=effective_orientation,
-                        media=effective_media, raster_dpi=reported_raster_dpi,
-                        reverse_order=effective_reverse_order,
-                        reverse_order_applied=reverse_order_applied,
-                        sides=sides, document_format=document_format,
-                        status_code=ipp_status_code, status=ipp_status,
-                    )
-
-                error = ipp_status
-                if status_code in _PRINTER_BUSY_STATUS_CODES and _queue_on_busy:
-                    busy_job = BusyPrintJob(
-                        filename=filename,
-                        pdf_data=source_pdf_data,
-                        duplex_mode=duplex_mode,
-                        booklet=booklet,
-                        copies=copies,
-                        collate=collate,
-                        orientation=orientation,
-                        media=media,
-                        raster_dpi=raster_dpi,
-                        reverse_order=effective_reverse_order,
-                    )
-                    self._queue_printer_busy_job(busy_job)
-                    queued_status = (
-                        "printer busy; queued for retry when printer is ready"
-                    )
-                    logger.warning(
-                        "Printer reported busy for '%s'; queued for retry",
-                        filename,
-                    )
-                    return PrintJobResult(
-                        filename=filename,
-                        success=True,
-                        duplex=duplex_mode,
-                        booklet=booklet,
-                        copies=effective_copies,
-                        collate=effective_collate,
-                        orientation=effective_orientation,
-                        media=effective_media,
-                        raster_dpi=reported_raster_dpi,
-                        reverse_order=effective_reverse_order,
-                        reverse_order_applied=reverse_order_applied,
-                        sides=sides,
-                        document_format=document_format,
-                        status_code="queued-busy",
-                        status=queued_status,
-                    )
-                logger.error("IPP rejected job for '%s': %s", filename, error)
+            )
+            body_prefix = body[:256].lstrip().lower()
+            if http_status != 200:
+                error = f"HTTP {http_status}"
+                logger.error("CUPS rejected job for '%s': %s", filename, error)
                 return PrintJobResult(
                     filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
@@ -4309,8 +4219,97 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     reverse_order=effective_reverse_order,
                     reverse_order_applied=reverse_order_applied,
                     sides=sides, document_format=document_format,
+                    status_code=error, status=error,
+                )
+
+            if body_prefix.startswith(b"<!doctype html") or body_prefix.startswith(b"<html"):
+                error = "HTTP 200 with HTML response"
+                logger.error("CUPS rejected job for '%s': %s", filename, error)
+                return PrintJobResult(
+                    filename=filename, success=False, error=error,
+                    duplex=duplex_mode, booklet=booklet,
+                    copies=effective_copies, collate=effective_collate,
+                    orientation=effective_orientation,
+                    media=effective_media, raster_dpi=reported_raster_dpi,
+                    reverse_order=effective_reverse_order,
+                    reverse_order_applied=reverse_order_applied,
+                    sides=sides, document_format=document_format,
+                    status_code="HTTP 200", status=error,
+                )
+
+            status_code, ipp_status = parse_ipp_response_status(body)
+            ipp_ok = status_code is not None and status_code < 0x0100
+            ipp_status_code = (
+                f"IPP 0x{status_code:04x}" if status_code is not None else None
+            )
+            if ipp_ok:
+                logger.debug(
+                    "Print job accepted for '%s' (format=%s, sides=%s, %s)",
+                    filename, document_format, sides, ipp_status,
+                )
+                return PrintJobResult(
+                    filename=filename, success=True,
+                    duplex=duplex_mode, booklet=booklet,
+                    copies=effective_copies, collate=effective_collate,
+                    orientation=effective_orientation,
+                    media=effective_media, raster_dpi=reported_raster_dpi,
+                    reverse_order=effective_reverse_order,
+                    reverse_order_applied=reverse_order_applied,
+                    sides=sides, document_format=document_format,
                     status_code=ipp_status_code, status=ipp_status,
                 )
+
+            error = ipp_status
+            if status_code in _PRINTER_BUSY_STATUS_CODES and _queue_on_busy:
+                busy_job = BusyPrintJob(
+                    filename=filename,
+                    pdf_data=source_pdf_data,
+                    duplex_mode=duplex_mode,
+                    booklet=booklet,
+                    copies=copies,
+                    collate=collate,
+                    orientation=orientation,
+                    media=media,
+                    raster_dpi=raster_dpi,
+                    reverse_order=effective_reverse_order,
+                )
+                self._queue_printer_busy_job(busy_job)
+                queued_status = (
+                    "printer busy; queued for retry when printer is ready"
+                )
+                logger.warning(
+                    "Printer reported busy for '%s'; queued for retry",
+                    filename,
+                )
+                return PrintJobResult(
+                    filename=filename,
+                    success=True,
+                    duplex=duplex_mode,
+                    booklet=booklet,
+                    copies=effective_copies,
+                    collate=effective_collate,
+                    orientation=effective_orientation,
+                    media=effective_media,
+                    raster_dpi=reported_raster_dpi,
+                    reverse_order=effective_reverse_order,
+                    reverse_order_applied=reverse_order_applied,
+                    sides=sides,
+                    document_format=document_format,
+                    status_code="queued-busy",
+                    status=queued_status,
+                )
+            logger.error("IPP rejected job for '%s': %s", filename, error)
+            return PrintJobResult(
+                filename=filename, success=False, error=error,
+                duplex=duplex_mode, booklet=booklet,
+                copies=effective_copies, collate=effective_collate,
+                orientation=effective_orientation,
+                media=effective_media, raster_dpi=reported_raster_dpi,
+                reverse_order=effective_reverse_order,
+                reverse_order_applied=reverse_order_applied,
+                sides=sides, document_format=document_format,
+                status_code=ipp_status_code, status=ipp_status,
+            )
 
         except asyncio.TimeoutError as exc:
             error = (
@@ -4652,7 +4651,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
     async def _async_check_printer_online(self) -> bool:
         """Return True if the printer or CUPS server is reachable."""
-        check_url = self._ipp_endpoint if self._is_direct_mode else self._cups_url
+        if self._is_direct_mode:
+            # Some printers close HTTP HEAD on the IPP endpoint;
+            # probe with IPP Get-Printer-Attributes instead.
+            session = async_get_clientsession(self.hass, verify_ssl=False)
+            return await async_probe_ipp_endpoint(
+                session, self._ipp_endpoint, timeout=5
+            )
+        check_url = self._cups_url
         session = async_get_clientsession(self.hass)
         try:
             async with session.head(
